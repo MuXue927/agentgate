@@ -1,5 +1,5 @@
 id: agentgate-demo-update-docs
-repo: D:/Projects/agentgate
+repo: D:/Projects/<your-repo>  # 改成你要跑的目标仓库
 goal: |
   Update the requested documentation and keep examples consistent with the
   current commands. Do not change runtime code for a documentation-only task.

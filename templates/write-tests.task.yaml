@@ -1,5 +1,5 @@
 id: agentgate-demo-write-tests
-repo: D:/Projects/agentgate
+repo: D:/Projects/<your-repo>  # 改成你要跑的目标仓库
 goal: |
   Add focused tests for the named behavior. Do not change production behavior
   unless a test exposes an existing defect; report any such defect explicitly.

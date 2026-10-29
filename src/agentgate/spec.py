@@ -18,6 +18,14 @@ class SpecError(ValueError):
     """Raised when a task or verdict document violates its contract."""
 
 
+def require_allowed_repo(task: TaskSpec, *, allow_self: bool) -> None:
+    if task.repo.resolve() == PROJECT_ROOT.resolve() and not allow_self:
+        raise SpecError(
+            "task.yaml repo points to AgentGate itself. "
+            "Choose the target repository or pass --allow-self explicitly."
+        )
+
+
 @dataclass(frozen=True)
 class ModelSpec:
     harness: str

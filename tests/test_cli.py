@@ -15,6 +15,7 @@ class TestCli:
         assert result.exit_code == 0
         assert "doctor" in result.output
         assert "run" in result.output
+        assert "clean" in result.output
 
     def test_doctor_route_returns_zero_when_required_probes_pass(self) -> None:
         report = DoctorReport(

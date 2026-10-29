@@ -1,5 +1,5 @@
 id: agentgate-demo-add-feature
-repo: D:/Projects/agentgate
+repo: D:/Projects/<your-repo>  # 改成你要跑的目标仓库
 goal: |
   Add one small feature while preserving the existing public behavior.
   Update its tests and keep the change limited to the requested scope.

@@ -7,6 +7,7 @@ import pytest
 
 from agentgate import dryrun, workspace
 from agentgate.dryrun import prepare_dry_run
+from agentgate.spec import SpecError
 from agentgate.workspace import cleanup_worktree
 
 
@@ -144,3 +145,28 @@ human_approval: {{before_execute: false, before_merge: true}}
         prepare_dry_run(task)
 
     assert not (repo / "wt" / "same-family-r1").exists()
+
+
+def test_self_repo_requires_explicit_allow(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo)
+    self_root = Path(__file__).resolve().parents[1]
+    updated = task.read_text(encoding="utf-8").replace(
+        repo.as_posix(),
+        self_root.as_posix(),
+    )
+    updated = updated.replace("safe-test-task", "self-check")
+    task.write_text(updated, encoding="utf-8")
+
+    with pytest.raises(SpecError, match="points to AgentGate itself"):
+        prepare_dry_run(task)
+
+    result = prepare_dry_run(task, allow_self=True)
+    try:
+        assert result.worktree.path == self_root / "wt" / "self-check-r1"
+    finally:
+        cleanup_worktree(
+            result.worktree.repo,
+            result.worktree.path,
+            result.worktree.branch,
+        )

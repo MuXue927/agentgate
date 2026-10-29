@@ -14,6 +14,7 @@ def test_all_templates_validate() -> None:
 
     assert len(templates) == 4
     assert [load_task(path).id for path in templates]
+    assert all("<your-repo>" in path.read_text(encoding="utf-8") for path in templates)
 
 
 def test_missing_budget_field_reports_exact_path() -> None:

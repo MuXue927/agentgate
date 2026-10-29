@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentgate.doctor import DSH_CLI, DSH_EXE
-from agentgate.spec import TaskSpec, load_task
+from agentgate.spec import TaskSpec, load_task, require_allowed_repo
 from agentgate.validation import ModelPair, evaluate_model_pair
 from agentgate.workspace import Worktree, cleanup_worktree, create_worktree
 
@@ -133,8 +133,9 @@ def shell_join(command: tuple[str, ...]) -> str:
     return " ".join(quote(value) for value in command)
 
 
-def prepare_dry_run(task_path: Path) -> DryRunResult:
+def prepare_dry_run(task_path: Path, *, allow_self: bool = False) -> DryRunResult:
     task = load_task(task_path)
+    require_allowed_repo(task, allow_self=allow_self)
     if task.executor.harness != "codex":
         raise ValueError("executor.harness: v0.2 requires Codex as the executor")
     pair = evaluate_model_pair(

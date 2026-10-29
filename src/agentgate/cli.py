@@ -11,7 +11,7 @@ from agentgate.doctor import collect_report, render_report
 from agentgate.dryrun import prepare_dry_run
 from agentgate.spec import SpecError
 from agentgate.validation import ModelPairError
-from agentgate.workspace import WorkspaceError
+from agentgate.workspace import WorkspaceError, clean_agent_worktrees
 
 
 def _configure_utf8_stdio() -> None:
@@ -74,6 +74,13 @@ def run(
             help="Validate, create the round-1 worktree, and print commands only.",
         ),
     ] = False,
+    allow_self: Annotated[
+        bool,
+        typer.Option(
+            "--allow-self",
+            help="Allow the AgentGate repository as the target.",
+        ),
+    ] = False,
 ) -> None:
     """Prepare an AgentGate task."""
 
@@ -84,11 +91,47 @@ def run(
         )
         raise typer.Exit(code=2)
     try:
-        result = prepare_dry_run(task)
+        result = prepare_dry_run(task, allow_self=allow_self)
     except (SpecError, ModelPairError, WorkspaceError, ValueError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     typer.echo(result.render())
+
+
+@app.command()
+def clean(
+    task_id: Annotated[
+        str | None,
+        typer.Argument(help="Task id; omit when using --all."),
+    ] = None,
+    all_tasks: Annotated[
+        bool,
+        typer.Option("--all", help="Clean every wt/ worktree and ag/* branch."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Delete dirty AgentGate worktrees."),
+    ] = False,
+) -> None:
+    """Remove AgentGate worktrees and ag/* branches safely."""
+
+    try:
+        result = clean_agent_worktrees(
+            Path.cwd(),
+            task_id=task_id,
+            all_tasks=all_tasks,
+            force=force,
+        )
+    except WorkspaceError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    if not result.worktrees and not result.branches:
+        typer.echo("无残留")
+        return
+    for path in result.worktrees:
+        typer.echo(f"removed worktree: {path}")
+    for branch in result.branches:
+        typer.echo(f"deleted branch: {branch}")
 
 
 def main() -> None:
