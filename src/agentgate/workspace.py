@@ -201,7 +201,13 @@ def clean_agent_worktrees(
     )
 
 
-def create_worktree(repo: Path, task_id: str, *, round_no: int = 1) -> Worktree:
+def create_worktree(
+    repo: Path,
+    task_id: str,
+    *,
+    round_no: int = 1,
+    base_ref: str | None = None,
+) -> Worktree:
     root = _repo_root(repo)
     path = _internal_worktree_path(root, task_id, round_no)
     branch = f"ag/{task_id}-r{round_no}"
@@ -210,16 +216,16 @@ def create_worktree(repo: Path, task_id: str, *, round_no: int = 1) -> Worktree:
     if _branch_exists(root, branch):
         raise WorkspaceError(f"Branch already exists: {branch}")
 
-    base = _run_git(root, ["rev-parse", "HEAD"])
+    base = _run_git(root, ["rev-parse", base_ref or "HEAD"])
     if base.returncode != 0:
         stderr = base.stderr.strip() or base.stdout.strip()
         raise WorkspaceError(f"Cannot resolve worktree base commit:\n{stderr}")
     base_commit = base.stdout.strip()
     path.parent.mkdir(parents=True, exist_ok=True)
-    result = _run_git(
-        root,
-        ["worktree", "add", "-b", branch, str(path)],
-    )
+    args = ["worktree", "add", "-b", branch, str(path)]
+    if base_ref is not None:
+        args.append(base_ref)
+    result = _run_git(root, args)
     if result.returncode != 0:
         cleanup_worktree(root, path, branch)
         stderr = result.stderr.strip() or result.stdout.strip()

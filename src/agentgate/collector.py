@@ -119,9 +119,14 @@ def _text(value: str | bytes | None) -> str:
     return value
 
 
-def ensure_run_slot(runs_root: Path, task_id: str) -> Path:
+def ensure_run_slot(
+    runs_root: Path,
+    task_id: str,
+    *,
+    round_no: int = 1,
+) -> Path:
     run_dir = runs_root / task_id
-    round_dir = run_dir / "round-1"
+    round_dir = run_dir / f"round-{round_no}"
     if round_dir.exists():
         raise CollectorError(f"Round directory already exists: {round_dir}")
     round_dir.mkdir(parents=True)
@@ -255,6 +260,7 @@ def _state_document(
     result: RunResult,
     pair: ModelPair,
     *,
+    round_no: int,
     status: str,
     started_at: str,
     finished_at: str,
@@ -262,10 +268,11 @@ def _state_document(
     return {
         "task_id": task.id,
         "repo": str(worktree.repo),
-        "round": 1,
+        "round": round_no,
         "status": status,
         "worktree": str(worktree.path),
         "branch": worktree.branch,
+        "base_commit": worktree.base_commit,
         "executor": {
             "harness": task.executor.harness,
             "model": task.executor.model,
@@ -310,6 +317,7 @@ def collect_success(
     *,
     round_dir: Path,
     started_at: str,
+    round_no: int = 1,
 ) -> CollectionResult:
     diff, status = _git_artifacts(worktree)
     checks = run_checks(task, worktree.path)
@@ -329,6 +337,7 @@ def collect_success(
         worktree,
         result,
         pair,
+        round_no=round_no,
         status="executed",
         started_at=started_at,
         finished_at=finished_at,
@@ -346,6 +355,7 @@ def collect_blocked(
     *,
     round_dir: Path,
     started_at: str,
+    round_no: int = 1,
     reason: str | None = None,
 ) -> CollectionResult:
     (round_dir / "executor.log").write_text(_executor_log(result), encoding="utf-8")
@@ -355,6 +365,7 @@ def collect_blocked(
         worktree,
         result,
         pair,
+        round_no=round_no,
         status="blocked",
         started_at=started_at,
         finished_at=finished_at,

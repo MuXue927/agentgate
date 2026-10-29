@@ -349,19 +349,21 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         stale.unlink()
 
 
-def verify_run(
+def verify_round(
     task_id: str,
     *,
+    round_no: int = 1,
     runs_root: Path | None = None,
     adapter: CodexAdapter | None = None,
     command_runner: CommandRunner = _run_command,
     force: bool = False,
+    manage_fail_status: bool = True,
 ) -> VerificationOutcome:
     if not task_id or Path(task_id).name != task_id:
         raise VerificationError(f"Invalid task id: {task_id!r}")
     root_runs = runs_root or (PROJECT_ROOT / "runs")
     run_dir = root_runs / task_id
-    round_dir = run_dir / "round-1"
+    round_dir = run_dir / f"round-{round_no}"
     task_path = run_dir / "task.yaml"
     state_path = round_dir / "state.json"
     if not task_path.is_file():
@@ -484,7 +486,7 @@ def verify_run(
         set_status(run_dir, "done")
     elif verdict["verdict"] == "BLOCKED":
         _mark_blocked(round_dir, verdict.get("summary", "verifier returned BLOCKED"))
-    else:
+    elif manage_fail_status:
         set_status(run_dir, "failed")
     return VerificationOutcome(
         task_id=task_id,
@@ -493,4 +495,22 @@ def verify_run(
         attempts=tuple(attempts),
         before_status=before_status,
         after_status=before_status,
+    )
+
+
+def verify_run(
+    task_id: str,
+    *,
+    runs_root: Path | None = None,
+    adapter: CodexAdapter | None = None,
+    command_runner: CommandRunner = _run_command,
+    force: bool = False,
+) -> VerificationOutcome:
+    return verify_round(
+        task_id,
+        round_no=1,
+        runs_root=runs_root,
+        adapter=adapter,
+        command_runner=command_runner,
+        force=force,
     )

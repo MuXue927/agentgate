@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from agentgate.cli import app
 from agentgate.doctor import DoctorReport
-from agentgate.spec import PROJECT_ROOT
 
 
 class TestCli:
@@ -33,39 +32,42 @@ class TestCli:
         assert "Double-blind tier: ★★" in result.output
 
     def test_run_without_dry_run_dispatches_execution(self) -> None:
-        round_dir = PROJECT_ROOT / "runs" / "fixture" / "round-1"
         outcome = SimpleNamespace(
-            blocked=False,
-            collection=SimpleNamespace(round_dir=round_dir),
+            state={
+                "status": "done",
+                "rounds": [{"round": 1}],
+                "elapsed_seconds": 1.0,
+                "final_branch": "ag/fixture-r1",
+            },
+            events=("Round 1: PASS → DONE",),
         )
-        with patch("agentgate.cli.execute_round", return_value=outcome) as execute:
+        with patch("agentgate.cli.start_task", return_value=outcome) as execute:
             result = CliRunner().invoke(
                 app,
                 ["run", "templates/add-feature.task.yaml"],
             )
 
         assert result.exit_code == 0
-        assert "Round 1 executed" in result.output
+        assert "Round 1: PASS → DONE" in result.output
+        assert "DONE + 1 轮" in result.output
         execute.assert_called_once()
 
-    def test_blocked_run_prints_raw_stderr(self) -> None:
-        round_dir = PROJECT_ROOT / "runs" / "fixture" / "round-1"
+    def test_blocked_run_prints_terminal_reason(self) -> None:
         outcome = SimpleNamespace(
-            blocked=True,
-            collection=SimpleNamespace(
-                round_dir=round_dir,
-                state={"executor": {"error_class": "UNKNOWN"}},
-            ),
-            result=SimpleNamespace(stderr="raw executor failure"),
+            state={
+                "status": "blocked",
+                "rounds": [],
+                "elapsed_seconds": 1.0,
+            },
+            events=("BLOCKED: raw executor failure",),
         )
-        with patch("agentgate.cli.execute_round", return_value=outcome):
+        with patch("agentgate.cli.start_task", return_value=outcome):
             result = CliRunner().invoke(
                 app,
                 ["run", "templates/add-feature.task.yaml"],
             )
 
         assert result.exit_code == 2
-        assert "Round 1 BLOCKED" in result.output
         assert "raw executor failure" in result.output
 
     def test_verify_fail_is_exit_zero_and_prints_defect(self) -> None:

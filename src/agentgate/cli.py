@@ -10,7 +10,12 @@ from agentgate import __version__
 from agentgate.collector import CollectorError
 from agentgate.doctor import collect_report, render_report
 from agentgate.dryrun import prepare_dry_run
-from agentgate.execution import execute_round
+from agentgate.orchestrator import (
+    OrchestratorError,
+    RunOutcome,
+    resume_task,
+    start_task,
+)
 from agentgate.spec import SpecError
 from agentgate.validation import ModelPairError
 from agentgate.verifier import VerificationError, verify_run
@@ -84,19 +89,32 @@ def run(
             help="Allow the AgentGate repository as the target.",
         ),
     ] = False,
+    rounds: Annotated[
+        int | None,
+        typer.Option(
+            "--rounds",
+            min=1,
+            help="Override the task's max_rounds for this run.",
+        ),
+    ] = None,
 ) -> None:
-    """Execute one task round or preview it with --dry-run."""
+    """Execute, verify, and iterate until a terminal state or the round limit."""
 
     try:
         if dry_run:
             result = prepare_dry_run(task, allow_self=allow_self)
         else:
-            outcome = execute_round(task, allow_self=allow_self)
+            outcome = start_task(
+                task,
+                max_rounds=rounds,
+                allow_self=allow_self,
+            )
     except (
         SpecError,
         ModelPairError,
         WorkspaceError,
         CollectorError,
+        OrchestratorError,
         ValueError,
     ) as exc:
         typer.echo(str(exc), err=True)
@@ -104,25 +122,12 @@ def run(
     if dry_run:
         typer.echo(result.render())
         return
-    if outcome.blocked:
-        typer.echo(
-            f"Round 1 BLOCKED → {outcome.collection.round_dir}",
-            err=True,
-        )
-        executor_state = outcome.collection.state.get("executor")
-        error_class = (
-            executor_state.get("error_class", "UNKNOWN")
-            if isinstance(executor_state, dict)
-            else "UNKNOWN"
-        )
-        typer.echo(error_class, err=True)
-        typer.echo("Raw stderr:", err=True)
-        typer.echo(outcome.result.stderr, err=True)
-        raise typer.Exit(code=2)
-    relative = outcome.collection.round_dir.relative_to(
-        outcome.collection.round_dir.parents[2]
+    _print_outcome(outcome)
+    code = {"done": 0, "failed": 1, "blocked": 2}.get(
+        str(outcome.state.get("status")),
+        2,
     )
-    typer.echo(f"Round 1 executed → {relative}")
+    raise typer.Exit(code=code)
 
 
 @app.command()
@@ -196,6 +201,56 @@ def verify(
         typer.echo(f"  reproduce: {defect['reproduce']}")
         typer.echo(f"  expect: {defect['expect']}")
         typer.echo(f"  actual: {defect['actual']}")
+
+
+def _print_outcome(outcome: RunOutcome) -> None:
+    for event in outcome.events:
+        typer.echo(event)
+    state = outcome.state
+    typer.echo(
+        f"{str(state.get('status', 'unknown')).upper()} + "
+        f"{len(state.get('rounds', []))} 轮 + "
+        f"{float(state.get('elapsed_seconds', 0)):.1f}s"
+    )
+    if state.get("status") == "done" and state.get("final_branch"):
+        typer.echo(f"Branch: {state['final_branch']}")
+        typer.echo(f"Merge: git merge --no-ff {state['final_branch']}")
+
+
+@app.command()
+def resume(
+    task_id: Annotated[
+        str,
+        typer.Argument(help="Task id under runs/."),
+    ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Discard a terminal run and start it again.",
+        ),
+    ] = False,
+) -> None:
+    """Resume from the next unfinished round."""
+
+    try:
+        outcome = resume_task(task_id, force=force)
+    except (
+        OrchestratorError,
+        SpecError,
+        ModelPairError,
+        WorkspaceError,
+        CollectorError,
+        ValueError,
+    ) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    _print_outcome(outcome)
+    code = {"done": 0, "failed": 1, "blocked": 2}.get(
+        str(outcome.state.get("status")),
+        2,
+    )
+    raise typer.Exit(code=code)
 
 
 def main() -> None:
