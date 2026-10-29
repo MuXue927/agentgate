@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agentgate import runner
-from agentgate.adapters.codex import CodexAdapter, ErrorClass, classify_error
+from agentgate.adapters.codex import Adapter, CodexAdapter, ErrorClass, classify_error
 from agentgate.spec import load_task
 from agentgate.validation import ModelPairError
 
@@ -36,7 +36,9 @@ def test_error_classification(
 
 
 def test_codex_command_uses_argument_list_and_readonly_flag(tmp_path: Path) -> None:
-    command = CodexAdapter().build_cmd(
+    adapter = CodexAdapter()
+    assert isinstance(adapter, Adapter)
+    command = adapter.build_cmd(
         "review this",
         "nvidia/nemotron-3.5-lightning:free",
         cwd=tmp_path,

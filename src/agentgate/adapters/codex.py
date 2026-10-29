@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol, runtime_checkable
 
 
 class ErrorClass(StrEnum):
@@ -33,6 +34,30 @@ class RunResult:
     transcript_path: Path | None
     usage: TokenUsage | None
     error_class: ErrorClass
+
+
+@runtime_checkable
+class Adapter(Protocol):
+    name: str
+
+    def capability(self) -> dict[str, bool]: ...
+
+    def build_cmd(
+        self,
+        prompt: str,
+        model: str,
+        *,
+        cwd: Path,
+        readonly: bool,
+        schema: Path | None,
+    ) -> list[str]: ...
+
+    def parse(
+        self,
+        proc: subprocess.CompletedProcess[str],
+        *,
+        workdir: Path,
+    ) -> RunResult: ...
 
 
 class CodexAdapter:

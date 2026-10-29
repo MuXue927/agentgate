@@ -1,6 +1,7 @@
 """Compatibility entry point for the packaged Codex adapter."""
 
 from agentgate.adapters.codex import (
+    Adapter,
     CodexAdapter,
     ErrorClass,
     RunResult,
@@ -9,6 +10,7 @@ from agentgate.adapters.codex import (
 )
 
 __all__ = [
+    "Adapter",
     "CodexAdapter",
     "ErrorClass",
     "RunResult",
