@@ -27,7 +27,7 @@ ag-resume-demo=BLOCKED
 以下计数均在本轮实现提交 `c82dae0` 之后，用报告中的原命令复跑：
 
 ```text
-71 passed, 2 subtests passed in 56.10s
+71 passed, 2 subtests passed in 54.67s
 All checks passed!
 29 files already formatted
 ```
@@ -229,7 +229,7 @@ final_status done
 ### 7. 回归、lint、doctor
 
 ```text
-71 passed, 2 subtests passed in 56.10s
+71 passed, 2 subtests passed in 54.67s
 All checks passed!
 29 files already formatted
 ```
@@ -237,10 +237,10 @@ All checks passed!
 `ag doctor`：
 
 ```text
-Codex (executor)                    | required | PASS | 7.38s
-Codex (default verifier, read-only) | required | PASS | 8.36s
-DSH (optional verifier)             | optional | FAIL | 5.20s
-Pi (optional verifier)              | optional | FAIL | 15.47s
+Codex (executor)                    | required | PASS | 7.73s
+Codex (default verifier, read-only) | required | PASS | 7.73s
+DSH (optional verifier)             | optional | FAIL | 4.80s
+Pi (optional verifier)              | optional | FAIL | 15.48s
 
 [DSH (optional verifier)] FAIL — 需 DEEPSEEK_API_KEY
 [Pi (optional verifier)] FAIL — 需智谱 key（ZHIPU_API_KEY）
