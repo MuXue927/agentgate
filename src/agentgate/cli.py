@@ -13,6 +13,7 @@ from agentgate.dryrun import prepare_dry_run
 from agentgate.execution import execute_round
 from agentgate.spec import SpecError
 from agentgate.validation import ModelPairError
+from agentgate.verifier import VerificationError, verify_run
 from agentgate.workspace import WorkspaceError, clean_agent_worktrees
 
 
@@ -158,6 +159,36 @@ def clean(
         typer.echo(f"removed worktree: {path}")
     for branch in result.branches:
         typer.echo(f"deleted branch: {branch}")
+
+
+@app.command()
+def verify(
+    task_id: Annotated[
+        str,
+        typer.Argument(help="Run / task id under runs/."),
+    ],
+) -> None:
+    """Verify an executed round once, without defect feedback or retry rounds."""
+
+    try:
+        outcome = verify_run(task_id)
+    except (VerificationError, SpecError, ModelPairError, OSError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    if outcome.verdict is None:
+        typer.echo(f"BLOCKED: {outcome.blocked_reason}", err=True)
+        raise typer.Exit(code=2)
+
+    verdict = outcome.verdict
+    typer.echo(f"Verdict: {verdict['verdict']}")
+    typer.echo(verdict.get("summary", ""))
+    for defect in verdict.get("defects", []):
+        typer.echo(
+            f"{defect['id']} [{defect['severity']}] {defect['where']}: {defect['why']}"
+        )
+        typer.echo(f"  reproduce: {defect['reproduce']}")
+        typer.echo(f"  expect: {defect['expect']}")
+        typer.echo(f"  actual: {defect['actual']}")
 
 
 def main() -> None:

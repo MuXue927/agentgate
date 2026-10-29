@@ -199,6 +199,11 @@ def load_verdict(path: Path) -> dict[str, Any]:
         raise SpecError(f"Verdict file not found: {path}") from exc
     except json.JSONDecodeError as exc:
         raise SpecError(f"Invalid JSON in {path}: {exc}") from exc
+    validate_verdict_document(document, source=f"verdict.json: {path}")
+    return document
+
+
+def validate_verdict_document(document: Any, *, source: str) -> None:
     if isinstance(document, dict) and document.get("verdict") == "PASS":
         defects = document.get("defects")
         if isinstance(defects, list) and defects:
@@ -206,8 +211,8 @@ def load_verdict(path: Path) -> dict[str, Any]:
                 "Invalid verdict.json:\n"
                 "- verdict.defects: PASS requires defects to be empty"
             )
-    validate_document(document, VERDICT_SCHEMA_PATH, source=f"verdict.json: {path}")
-    if document.get("verdict") == "PASS":
+    validate_document(document, VERDICT_SCHEMA_PATH, source=source)
+    if isinstance(document, dict) and document.get("verdict") == "PASS":
         failed_checks = [
             check["name"]
             for check in document.get("checks", [])
@@ -219,4 +224,3 @@ def load_verdict(path: Path) -> dict[str, Any]:
                 "Invalid verdict.json:\n"
                 f"- verdict.checks: PASS requires every check to pass ({names})"
             )
-    return document

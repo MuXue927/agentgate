@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 
 from agentgate import dryrun, workspace
-from agentgate.dryrun import prepare_dry_run
-from agentgate.spec import SpecError
-from agentgate.workspace import cleanup_worktree
+from agentgate.dryrun import build_execution_prompt, prepare_dry_run
+from agentgate.spec import SpecError, load_task
+from agentgate.workspace import Worktree, cleanup_worktree
 
 
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -145,6 +145,21 @@ human_approval: {{before_execute: false, before_merge: true}}
         prepare_dry_run(task)
 
     assert not (repo / "wt" / "same-family-r1").exists()
+
+
+def test_execution_prompt_forbids_git_commit_and_add(tmp_path: Path) -> None:
+    task = load_task(
+        Path(__file__).resolve().parents[1] / "templates" / "fix-bug.task.yaml"
+    )
+    worktree = Worktree(
+        repo=tmp_path,
+        path=tmp_path / "wt" / "fixture-r1",
+        branch="ag/fixture-r1",
+    )
+
+    prompt = build_execution_prompt(task, worktree)
+
+    assert "Do not run git commit or git add" in prompt
 
 
 def test_self_repo_requires_explicit_allow(tmp_path: Path) -> None:

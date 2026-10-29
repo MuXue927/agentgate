@@ -67,3 +67,39 @@ class TestCli:
         assert result.exit_code == 2
         assert "Round 1 BLOCKED" in result.output
         assert "raw executor failure" in result.output
+
+    def test_verify_fail_is_exit_zero_and_prints_defect(self) -> None:
+        verdict = {
+            "verdict": "FAIL",
+            "summary": "bad content",
+            "checks": [],
+            "defects": [
+                {
+                    "id": "D1",
+                    "severity": "blocking",
+                    "where": "hello.txt:1",
+                    "why": "wrong",
+                    "reproduce": "type hello.txt",
+                    "expect": "ok2",
+                    "actual": "ok",
+                }
+            ],
+        }
+        outcome = SimpleNamespace(verdict=verdict, blocked_reason="")
+        with patch("agentgate.cli.verify_run", return_value=outcome):
+            result = CliRunner().invoke(app, ["verify", "fixture"])
+
+        assert result.exit_code == 0
+        assert "Verdict: FAIL" in result.output
+        assert "reproduce: type hello.txt" in result.output
+
+    def test_verify_blocked_is_exit_two(self) -> None:
+        outcome = SimpleNamespace(
+            verdict=None,
+            blocked_reason="verdict extraction failed twice",
+        )
+        with patch("agentgate.cli.verify_run", return_value=outcome):
+            result = CliRunner().invoke(app, ["verify", "fixture"])
+
+        assert result.exit_code == 2
+        assert "BLOCKED: verdict extraction failed twice" in result.output
