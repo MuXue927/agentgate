@@ -54,7 +54,8 @@ def build_execution_prompt(task: TaskSpec, worktree: Worktree) -> str:
         f"{_bullet_lines(task.constraints)}\n\n"
         "Acceptance checks (the verifier will run these independently):\n"
         f"{_bullet_lines(f'{check.name}: {check.run}' for check in task.checks)}\n\n"
-        "Do not push or merge. Do not change files outside the task scope."
+        "Do not run git commit or git add. Do not push or merge. "
+        "Do not change files outside the task scope."
     )
 
 

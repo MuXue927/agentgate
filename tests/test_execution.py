@@ -96,13 +96,14 @@ def test_success_collects_only_artifacts_for_verifier(
         assert (round_dir / "executor.log").is_file()
         assert (round_dir / "state.json").is_file()
         assert (round_dir / "verifier_input.md").is_file()
+        assert (round_dir.parent / "task.yaml").is_file()
         assert (round_dir.parent / "EXECUTED").is_file()
         assert list((round_dir / "artifacts").glob("*.stdout.txt"))
 
         diff = (round_dir / "diff.patch").read_text(encoding="utf-8")
         assert "hello.txt" in diff
         assert "+ok" in diff
-        assert "?? hello.txt" in diff
+        assert "A  hello.txt" in diff
 
         executor_log = (round_dir / "executor.log").read_text(encoding="utf-8")
         verifier_input = (round_dir / "verifier_input.md").read_text(encoding="utf-8")
@@ -126,6 +127,63 @@ def test_success_collects_only_artifacts_for_verifier(
         cleanup_worktree(
             repo,
             outcome.task.repo / "wt" / "execution-fixture-r1",
+            "ag/execution-fixture-r1",
+        )
+
+
+def test_executor_commit_is_still_collected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo)
+
+    def committing_executor(*args: object, **kwargs: object) -> RunResult:
+        worktree = kwargs["cwd"]
+        assert isinstance(worktree, Path)
+        (worktree / "hello.txt").write_text("ok\n", encoding="utf-8")
+        git(worktree, "add", "hello.txt")
+        git(worktree, "commit", "-m", "executor commit")
+        return result()
+
+    monkeypatch.setattr(execution.runner, "run", committing_executor)
+    outcome = execution.execute_round(task, runs_root=tmp_path / "commit-runs")
+    try:
+        assert not outcome.blocked
+        patch = (outcome.collection.round_dir / "diff.patch").read_text(
+            encoding="utf-8"
+        )
+        assert "hello.txt" in patch
+        assert "+ok" in patch
+        assert "executor commit" in patch
+    finally:
+        cleanup_worktree(
+            repo,
+            repo / "wt" / "execution-fixture-r1",
+            "ag/execution-fixture-r1",
+        )
+
+
+def test_no_changes_blocks_without_executed_or_verifier_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo)
+
+    monkeypatch.setattr(execution.runner, "run", lambda *args, **kwargs: result())
+    outcome = execution.execute_round(task, runs_root=tmp_path / "empty-runs")
+    round_dir = outcome.collection.round_dir
+    try:
+        assert outcome.blocked
+        marker = (round_dir.parent / "BLOCKED").read_text(encoding="utf-8")
+        assert "no changes detected" in marker
+        assert not (round_dir / "verifier_input.md").exists()
+        assert not (round_dir.parent / "EXECUTED").exists()
+    finally:
+        cleanup_worktree(
+            repo,
+            repo / "wt" / "execution-fixture-r1",
             "ag/execution-fixture-r1",
         )
 

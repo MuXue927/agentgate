@@ -18,6 +18,10 @@ class CollectorError(RuntimeError):
     """Raised when a required artifact cannot be collected."""
 
 
+class NoChangesError(CollectorError):
+    """Raised when executor success produced no changes."""
+
+
 @dataclass(frozen=True)
 class CheckOutput:
     spec: CheckSpec
@@ -52,7 +56,7 @@ def _run_git(
         raise CollectorError(f"git artifact command failed: {exc}") from exc
 
 
-def _slug(name: str) -> str:
+def check_slug(name: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
     return normalized or "check"
 
@@ -135,7 +139,7 @@ def _write_artifacts(
     artifacts.mkdir()
     paths: list[Path] = []
     for index, check in enumerate(checks, start=1):
-        stem = f"{index:02d}-{_slug(check.spec.name)}"
+        stem = f"{index:02d}-{check_slug(check.spec.name)}"
         files = {
             f"{stem}.stdout.txt": check.stdout,
             f"{stem}.stderr.txt": check.stderr,
@@ -148,24 +152,48 @@ def _write_artifacts(
     return tuple(paths)
 
 
-def _git_artifacts(worktree: Path) -> tuple[str, str]:
-    status = _run_git(worktree, ["status", "--porcelain"])
+def _git_artifacts(worktree: Worktree) -> tuple[str, str]:
+    staged = _run_git(worktree.path, ["add", "-A"])
+    if staged.returncode != 0:
+        raise CollectorError(
+            "git add -A failed: " + (staged.stderr.strip() or staged.stdout.strip())
+        )
+    head_diff = _run_git(worktree.path, ["diff", "HEAD"])
+    if head_diff.returncode != 0:
+        raise CollectorError(
+            "git diff HEAD failed: "
+            + (head_diff.stderr.strip() or head_diff.stdout.strip())
+        )
+
+    patch = head_diff.stdout
+    commits = ""
+    if worktree.base_commit:
+        full_diff = _run_git(worktree.path, ["diff", worktree.base_commit])
+        if full_diff.returncode != 0:
+            raise CollectorError(
+                "git diff base failed: "
+                + (full_diff.stderr.strip() or full_diff.stdout.strip())
+            )
+        if full_diff.stdout:
+            patch = full_diff.stdout
+        log = _run_git(
+            worktree.path,
+            ["log", "--format=%h %s", f"{worktree.base_commit}..HEAD"],
+        )
+        if log.returncode == 0 and log.stdout.strip():
+            commits = log.stdout.strip()
+
+    status = _run_git(worktree.path, ["status", "--porcelain"])
     if status.returncode != 0:
         raise CollectorError(
             "git status failed: " + (status.stderr.strip() or status.stdout.strip())
         )
-    intent = _run_git(worktree, ["add", "--intent-to-add", "--", "."])
-    if intent.returncode != 0:
-        raise CollectorError(
-            "git add --intent-to-add failed: "
-            + (intent.stderr.strip() or intent.stdout.strip())
-        )
-    diff = _run_git(worktree, ["diff", "HEAD"])
-    if diff.returncode != 0:
-        raise CollectorError(
-            "git diff HEAD failed: " + (diff.stderr.strip() or diff.stdout.strip())
-        )
-    return diff.stdout, status.stdout
+    if not patch.strip() and not status.stdout.strip():
+        raise NoChangesError("no changes detected")
+
+    if commits:
+        patch = f"{patch}\n--- commits since base ---\n{commits}\n"
+    return patch, status.stdout
 
 
 def _fenced(content: str, language: str = "text") -> str:
@@ -174,7 +202,7 @@ def _fenced(content: str, language: str = "text") -> str:
     return f"{fence}{language}\n{content}\n{fence}"
 
 
-def _verifier_input(
+def render_verifier_input(
     task: TaskSpec,
     diff: str,
     status: str,
@@ -282,15 +310,16 @@ def collect_success(
     round_dir: Path,
     started_at: str,
 ) -> CollectionResult:
+    diff, status = _git_artifacts(worktree)
     checks = run_checks(task, worktree.path)
     _write_artifacts(round_dir, checks)
     (round_dir / "executor.log").write_text(_executor_log(result), encoding="utf-8")
 
-    diff, status = _git_artifacts(worktree.path)
     diff_patch = f"{diff}\n--- git status --porcelain ---\n{status}"
     (round_dir / "diff.patch").write_text(diff_patch, encoding="utf-8")
+    (round_dir / "changed_files.txt").write_text(status, encoding="utf-8")
     (round_dir / "verifier_input.md").write_text(
-        _verifier_input(task, diff_patch, status, checks),
+        render_verifier_input(task, diff_patch, status, checks),
         encoding="utf-8",
     )
     finished_at = utc_now()
@@ -316,6 +345,7 @@ def collect_blocked(
     *,
     round_dir: Path,
     started_at: str,
+    reason: str | None = None,
 ) -> CollectionResult:
     (round_dir / "executor.log").write_text(_executor_log(result), encoding="utf-8")
     finished_at = utc_now()
@@ -331,7 +361,7 @@ def collect_blocked(
     _write_json(round_dir / "state.json", state)
     marker = round_dir.parent / "BLOCKED"
     marker.write_text(
-        f"{result.error_class.value}: {result.stderr}",
+        reason or f"{result.error_class.value}: {result.stderr}",
         encoding="utf-8",
     )
     return CollectionResult(round_dir=round_dir, state=state, checks=())

@@ -16,6 +16,7 @@ class Worktree:
     repo: Path
     path: Path
     branch: str
+    base_commit: str | None = None
 
 
 @dataclass(frozen=True)
@@ -209,6 +210,11 @@ def create_worktree(repo: Path, task_id: str, *, round_no: int = 1) -> Worktree:
     if _branch_exists(root, branch):
         raise WorkspaceError(f"Branch already exists: {branch}")
 
+    base = _run_git(root, ["rev-parse", "HEAD"])
+    if base.returncode != 0:
+        stderr = base.stderr.strip() or base.stdout.strip()
+        raise WorkspaceError(f"Cannot resolve worktree base commit:\n{stderr}")
+    base_commit = base.stdout.strip()
     path.parent.mkdir(parents=True, exist_ok=True)
     result = _run_git(
         root,
@@ -218,7 +224,12 @@ def create_worktree(repo: Path, task_id: str, *, round_no: int = 1) -> Worktree:
         cleanup_worktree(root, path, branch)
         stderr = result.stderr.strip() or result.stdout.strip()
         raise WorkspaceError(f"git worktree add failed:\n{stderr}")
-    return Worktree(repo=root, path=path, branch=branch)
+    return Worktree(
+        repo=root,
+        path=path,
+        branch=branch,
+        base_commit=base_commit,
+    )
 
 
 def cleanup_worktree(repo: Path, path: Path, branch: str) -> None:

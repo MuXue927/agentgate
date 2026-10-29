@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from agentgate.adapters.codex import RunResult
 from agentgate.collector import (
     CollectionResult,
     CollectorError,
+    NoChangesError,
     collect_blocked,
     collect_success,
     ensure_run_slot,
@@ -47,6 +49,7 @@ def execute_round(
 
     destination = runs_root or (PROJECT_ROOT / "runs")
     round_dir = ensure_run_slot(destination, task.id)
+    shutil.copyfile(task.path, round_dir.parent / "task.yaml")
     worktree = create_worktree(task.repo, task.id, round_no=1)
     started_at = utc_now()
     try:
@@ -68,14 +71,32 @@ def execute_round(
                 result=result,
                 blocked=True,
             )
-        collection = collect_success(
-            task,
-            worktree,
-            result,
-            pair,
-            round_dir=round_dir,
-            started_at=started_at,
-        )
+        try:
+            collection = collect_success(
+                task,
+                worktree,
+                result,
+                pair,
+                round_dir=round_dir,
+                started_at=started_at,
+            )
+        except NoChangesError as exc:
+            collection = collect_blocked(
+                task,
+                worktree,
+                result,
+                pair,
+                round_dir=round_dir,
+                started_at=started_at,
+                reason=str(exc),
+            )
+            return ExecutionOutcome(
+                task=task,
+                pair=pair,
+                collection=collection,
+                result=result,
+                blocked=True,
+            )
     except Exception:
         if not (round_dir.parent / "BLOCKED").exists():
             (round_dir.parent / "BLOCKED").write_text(
