@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -33,3 +34,21 @@ def test_verdict_pass_with_defects_is_rejected() -> None:
         load_verdict(fixture)
 
     assert "PASS requires defects to be empty" in str(error.value)
+
+
+def test_fail_without_defects_is_rejected(tmp_path: Path) -> None:
+    fixture = tmp_path / "fail-empty.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "verdict": "FAIL",
+                "summary": "failed",
+                "checks": [],
+                "defects": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError, match=r"defects.*non-empty"):
+        load_verdict(fixture)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -12,6 +13,7 @@ from agentgate.execution import ExecutionOutcome, build_defect_prompt
 from agentgate.orchestrator import (
     OrchestratorError,
     Usage,
+    _usage_from_ocx,
     defect_fingerprint,
     resume_task,
     start_task,
@@ -282,6 +284,37 @@ def test_rounds_override_one_ends_failed_without_retry(
         )
 
 
+def test_fail_without_defects_blocks_instead_of_retrying(
+    tmp_path: Path,
+) -> None:
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo, max_rounds=3)
+    tools = FakeRoundTools(
+        repo,
+        tmp_path / "runs",
+        verdicts=[verdict("FAIL")],
+    )
+    try:
+        outcome = start_task(
+            task,
+            runs_root=tmp_path / "runs",
+            executor=tools.executor,
+            verifier=tools.verifier,
+            usage_provider=usage,
+        )
+
+        assert outcome.state["status"] == "blocked"
+        assert len(tools.execution_calls) == 1
+        assert "without defect details" in outcome.state["terminal_reason"]
+        assert (tmp_path / "runs" / "loop-fixture" / "BLOCKED").is_file()
+    finally:
+        cleanup_worktree(
+            repo,
+            repo / "wt" / "loop-fixture-r1",
+            "ag/loop-fixture-r1",
+        )
+
+
 def test_same_defect_fingerprint_stops_at_round_two(
     tmp_path: Path,
 ) -> None:
@@ -397,6 +430,47 @@ def test_terminal_resume_requires_force(
         )
 
 
+def test_fingerprint_normalizes_structured_exit_code_wording() -> None:
+    first = defect(
+        why=(
+            "The check expects exit code 0 from `cmd /c exit 1`, "
+            "but the command always exits with code 1"
+        )
+    )
+    second = defect(why="Expected exit code 0 but actual exit code was 1")
+
+    assert defect_fingerprint(first) == defect_fingerprint(second)
+
+
+def test_fingerprint_uses_actual_verifier_wording_variants() -> None:
+    variants = (
+        defect(
+            where="verification input",
+            why="Check expects exit code 0 but command exits with code 1",
+        ),
+        {
+            **defect(
+                why=(
+                    "The permanently-failing-check is designed to always fail, "
+                    "verification must correctly report the exit code mismatch"
+                )
+            ),
+            "where": "retry-v3.txt verification",
+            "expect": "exit code 0",
+            "actual": "exit code 1",
+        },
+        defect(
+            where="verification input - permanently-failing-check",
+            why=(
+                "Command `cmd /c exit 1` exits with code 1 "
+                "but check expects exit code 0"
+            ),
+        ),
+    )
+
+    assert len({defect_fingerprint(item) for item in variants}) == 1
+
+
 def test_resume_verifies_executed_round_without_reexecution(
     tmp_path: Path,
 ) -> None:
@@ -474,3 +548,25 @@ def test_total_budget_exceeded_blocks(
             repo / "wt" / "loop-fixture-r1",
             "ag/loop-fixture-r1",
         )
+
+
+def test_ocx_usage_uses_resolved_executable() -> None:
+    payload = json.dumps(
+        {
+            "summary": {
+                "totalTokens": 123,
+                "estimatedCostUsd": 0.5,
+            }
+        }
+    )
+    with (
+        patch("agentgate.orchestrator.shutil.which", return_value=r"C:\bin\ocx.cmd"),
+        patch(
+            "agentgate.orchestrator.subprocess.run",
+            return_value=subprocess.CompletedProcess([], 0, payload, ""),
+        ) as run,
+    ):
+        usage = _usage_from_ocx()
+
+    assert usage == Usage(total_tokens=123, cost_usd=0.5)
+    assert run.call_args.args[0][0] == r"C:\bin\ocx.cmd"

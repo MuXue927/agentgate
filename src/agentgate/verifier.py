@@ -242,7 +242,7 @@ def _prompt(
         "name, status (PASS/FAIL), evidence. defects items have "
         "id, severity, where, why, reproduce, expect, actual.\n"
         "PASS requires every check to be PASS and defects to be empty.\n"
-        "FAIL or BLOCKED may include defect objects.\n"
+        "FAIL requires at least one defect object. BLOCKED may include defects.\n"
         "Every defect must include a directly executable reproduce command.\n"
         f"{retry}\n"
         "Verification input:\n"

@@ -61,13 +61,43 @@ def _normalize_text(value: object) -> str:
     return re.sub(r"\s+", " ", str(value)).strip().casefold()
 
 
-def defect_fingerprint(defect: dict[str, Any]) -> str:
-    normalized = "\0".join(
-        (
-            _normalize_text(defect.get("where", "")),
-            _normalize_text(defect.get("why", "")),
-        )
+def _normalize_why(why: object) -> str:
+    text = _normalize_text(why)
+    expected = re.search(
+        r"(?:expects?|expected)\s+(?:exit\s+code\s+)?([-+]?\d+(?:\.\d+)?)",
+        text,
     )
+    actual = re.search(
+        r"(?:actual\s+(?:exit\s+code\s+)?(?:was\s+)?|"
+        r"(?:exits|exited|returns|returned)\s+(?:with\s+)?(?:code\s+)?)"
+        r"([-+]?\d+(?:\.\d+)?)",
+        text,
+    )
+    if expected and actual and ("code" in text or "exit" in text):
+        return f"exit-code expected={expected.group(1)} actual={actual.group(1)}"
+    return text
+
+
+def _normalize_where(where: object) -> str:
+    text = _normalize_text(where)
+    if "verification" in text:
+        return "verification-check"
+    return text
+
+
+def _numeric_value(value: object) -> str:
+    match = re.search(r"[-+]?\d+(?:\.\d+)?", str(value))
+    return match.group(0) if match else _normalize_text(value)
+
+
+def defect_fingerprint(defect: dict[str, Any]) -> str:
+    why = _normalize_why(defect.get("why", ""))
+    if not why.startswith("exit-code expected=") and ("exit" in why and "code" in why):
+        why = (
+            f"exit-code expected={_numeric_value(defect.get('expect'))} "
+            f"actual={_numeric_value(defect.get('actual'))}"
+        )
+    normalized = "\0".join((_normalize_where(defect.get("where", "")), why))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
 
@@ -81,8 +111,11 @@ def _defect_map(verdict: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
 
 
 def _usage_from_ocx() -> Usage:
+    executable = shutil.which("ocx")
+    if executable is None:
+        raise OrchestratorError("ocx executable not found")
     completed = subprocess.run(
-        ["ocx", "usage", "--range", "today", "--surface", "codex", "--json"],
+        [executable, "usage", "--range", "today", "--surface", "codex", "--json"],
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -108,6 +141,21 @@ def _safe_usage(provider: UsageProvider) -> dict[str, float | int] | None:
     except (OSError, ValueError, KeyError, json.JSONDecodeError, OrchestratorError):
         return None
     return {"total_tokens": usage.total_tokens, "cost_usd": usage.cost_usd}
+
+
+def _usage_after_run(
+    provider: UsageProvider,
+    before: object,
+) -> dict[str, float | int] | None:
+    current = _safe_usage(provider)
+    if provider is not _usage_from_ocx or not isinstance(before, dict):
+        return current
+    for _ in range(6):
+        if current is not None and current != before:
+            return current
+        time.sleep(2)
+        current = _safe_usage(provider)
+    return current
 
 
 def _checkpoint_round(worktree: Path, *, round_no: int) -> str:
@@ -240,9 +288,9 @@ def _finish(
 ) -> dict[str, Any]:
     state["status"] = status
     state["terminal_reason"] = reason
-    usage_after = _safe_usage(usage_provider)
-    state["usage_after"] = usage_after
     usage_before = state.get("usage_before")
+    usage_after = _usage_after_run(usage_provider, usage_before)
+    state["usage_after"] = usage_after
     if isinstance(usage_before, dict) and usage_after is not None:
         state["cost_tokens"] = int(usage_after["total_tokens"]) - int(
             usage_before["total_tokens"]
@@ -273,7 +321,12 @@ def _drive(
     on_event: EventSink | None,
 ) -> RunOutcome:
     events: list[str] = []
-    del on_event
+
+    def push(message: str) -> None:
+        events.append(message)
+        if on_event is not None:
+            on_event(message)
+
     clear_markers(run_dir)
     state["status"] = "running"
     _save(run_dir, state)
@@ -292,7 +345,7 @@ def _drive(
                 reason=reason,
                 usage_provider=usage_provider,
             )
-            events.append(f"BLOCKED: {reason}")
+            push(f"BLOCKED: {reason}")
             break
 
         rounds: list[dict[str, Any]] = state["rounds"]
@@ -312,7 +365,7 @@ def _drive(
                     reason=reason,
                     usage_provider=usage_provider,
                 )
-                events.append(f"FAILED: {reason}")
+                push(f"FAILED: {reason}")
                 break
 
             defects: list[dict[str, Any]] | None = None
@@ -327,9 +380,17 @@ def _drive(
                     else None
                 )
                 if not defects:
-                    raise OrchestratorError(
-                        "Previous round failed without defect details"
+                    reason = "previous round failed without defect details"
+                    state = _finish(
+                        task,
+                        run_dir,
+                        state,
+                        "blocked",
+                        reason=reason,
+                        usage_provider=usage_provider,
                     )
+                    push(f"BLOCKED: {reason}")
+                    break
                 base_ref = previous["branch"]
                 previous_round_dir = run_dir / f"round-{previous['round']}"
 
@@ -355,7 +416,7 @@ def _drive(
                     reason=reason,
                     usage_provider=usage_provider,
                 )
-                events.append(f"BLOCKED: {reason}")
+                push(f"BLOCKED: {reason}")
                 break
 
             state["elapsed_seconds"] += _stage_elapsed(clock, stage_started)
@@ -372,7 +433,7 @@ def _drive(
                     reason=reason,
                     usage_provider=usage_provider,
                 )
-                events.append(f"BLOCKED: {reason}")
+                push(f"BLOCKED: {reason}")
                 break
             round_dir = execution.collection.round_dir
             (round_dir / "executor_prompt.txt").write_text(
@@ -393,7 +454,7 @@ def _drive(
                     reason=reason,
                     usage_provider=usage_provider,
                 )
-                events.append(f"BLOCKED: {reason}")
+                push(f"BLOCKED: {reason}")
                 break
 
             try:
@@ -410,7 +471,7 @@ def _drive(
                     reason=str(exc),
                     usage_provider=usage_provider,
                 )
-                events.append(f"BLOCKED: {exc}")
+                push(f"BLOCKED: {exc}")
                 break
 
             rounds.append(
@@ -465,7 +526,7 @@ def _drive(
                 reason=reason,
                 usage_provider=usage_provider,
             )
-            events.append(f"BLOCKED: {reason}")
+            push(f"BLOCKED: {reason}")
             break
 
         if verification.verdict is None:
@@ -478,7 +539,7 @@ def _drive(
                 reason=reason,
                 usage_provider=usage_provider,
             )
-            events.append(f"BLOCKED: {reason}")
+            push(f"BLOCKED: {reason}")
             break
 
         verdict = verification.verdict
@@ -495,7 +556,7 @@ def _drive(
                 reason="verification passed",
                 usage_provider=usage_provider,
             )
-            events.append(f"Round {round_no}: PASS → DONE")
+            push(f"Round {round_no}: PASS → DONE")
             break
 
         current_round["status"] = "verified_fail"
@@ -529,7 +590,7 @@ def _drive(
                 reason=reason,
                 usage_provider=usage_provider,
             )
-            events.append(f"Round {round_no}: FAIL ({defect_count} defect) → FAILED")
+            push(f"Round {round_no}: FAIL ({defect_count} defect) → FAILED")
             break
 
         if round_no >= int(state["effective_max_rounds"]):
@@ -543,12 +604,12 @@ def _drive(
                 reason=reason,
                 usage_provider=usage_provider,
             )
-            events.append(f"Round {round_no}: FAIL ({defect_count} defect) → FAILED")
+            push(f"Round {round_no}: FAIL ({defect_count} defect) → FAILED")
             break
 
         state["status"] = "running"
         _save(run_dir, state)
-        events.append(f"Round {round_no}: FAIL ({defect_count} defect) → continue")
+        push(f"Round {round_no}: FAIL ({defect_count} defect) → continue")
 
     return RunOutcome(
         task=task,

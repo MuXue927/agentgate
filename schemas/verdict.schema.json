@@ -118,6 +118,22 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "FAIL"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "defects": {
+            "minItems": 1
+          }
+        }
+      }
     }
   ]
 }

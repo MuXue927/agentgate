@@ -74,7 +74,9 @@ def render_report(
     rounds = state.get("rounds", [])
     final_branch = state.get("final_branch") or "(none)"
     base_commit = rounds[0].get("base_commit", "HEAD") if rounds else "HEAD"
-    stat = _diff_stat(repo, base_commit, final_branch) if rounds else "(no rounds)"
+    last_branch = rounds[-1].get("branch", final_branch) if rounds else "(none)"
+    compare_branch = final_branch if state.get("status") == "done" else last_branch
+    stat = _diff_stat(repo, base_commit, compare_branch) if rounds else "(no rounds)"
 
     lines = [
         (
@@ -95,13 +97,15 @@ def render_report(
         "",
         "## 你需要做的",
     ]
-    if rounds:
+    if rounds and state.get("status") == "done":
         lines.extend(
             (
                 f"git diff {base_commit}..{final_branch}",
                 f"git merge --no-ff {final_branch}",
             )
         )
+    elif rounds:
+        lines.append(f"Inspect defects in {last_branch} and the round verdicts.")
     else:
         lines.append("Inspect the run artifacts and terminal reason.")
     lines.append("")
