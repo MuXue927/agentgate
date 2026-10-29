@@ -1,0 +1,13 @@
+id: invalid-same-family
+repo: D:/Projects/agentgate
+goal: Validate that model aliases in one family cannot bypass the blind check.
+executor: {harness: codex, model: deepseek-v4-pro}
+verifier: {harness: codex, model: deepseek-flash}
+constraints:
+  - Do not push.
+checks:
+  - name: tests
+    run: uv run pytest -q
+    expect: {exit: 0}
+budget: {max_rounds: 1, max_minutes_per_round: 10, max_total_minutes: 20}
+human_approval: {before_execute: false, before_merge: true}

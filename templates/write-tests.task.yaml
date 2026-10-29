@@ -1,0 +1,19 @@
+id: agentgate-demo-write-tests
+repo: D:/Projects/agentgate
+goal: |
+  Add focused tests for the named behavior. Do not change production behavior
+  unless a test exposes an existing defect; report any such defect explicitly.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Change test files only unless a production fix is required for correctness.
+  - Do not push or merge.
+checks:
+  - name: tests
+    run: uv run pytest -q
+    expect: {exit: 0, stdout_not_contains: failed}
+  - name: test-files-changed
+    run: git diff --name-only
+    expect: {stdout_regex: '(^|\n)tests/'}
+budget: {max_rounds: 3, max_minutes_per_round: 25, max_total_minutes: 90}
+human_approval: {before_execute: false, before_merge: true}

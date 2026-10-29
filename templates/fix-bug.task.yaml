@@ -1,0 +1,19 @@
+id: agentgate-demo-fix-bug
+repo: D:/Projects/agentgate
+goal: |
+  Reproduce the reported bug, fix its root cause, and add a regression test.
+  Do not broaden the change beyond the reported behavior.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Keep the regression test in tests/.
+  - Do not push or merge.
+checks:
+  - name: reproduce-regression
+    run: uv run pytest -q -k "regression or reproduce"
+    expect: {exit: 0}
+  - name: full-tests
+    run: uv run pytest -q
+    expect: {exit: 0, stdout_not_contains: failed}
+budget: {max_rounds: 3, max_minutes_per_round: 25, max_total_minutes: 90}
+human_approval: {before_execute: false, before_merge: true}

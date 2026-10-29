@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentgate.local/schemas/verdict.schema.json",
+  "title": "AgentGate verifier verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "checks", "defects"],
+  "properties": {
+    "verdict": {
+      "enum": ["PASS", "FAIL", "BLOCKED"]
+    },
+    "summary": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "status", "evidence"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": ["PASS", "FAIL"]
+          },
+          "evidence": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "defects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "where",
+          "why",
+          "reproduce",
+          "expect",
+          "actual"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "severity": {
+            "type": "string",
+            "minLength": 1
+          },
+          "where": {
+            "type": "string",
+            "minLength": 1
+          },
+          "why": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reproduce": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expect": {
+            "type": "string"
+          },
+          "actual": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "verdict": {
+            "const": "PASS"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "defects": {
+            "maxItems": 0
+          },
+          "checks": {
+            "items": {
+              "properties": {
+                "status": {
+                  "const": "PASS"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "defects": {
+            "minItems": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "verdict": {
+            "enum": ["FAIL", "BLOCKED"]
+          }
+        }
+      }
+    }
+  ]
+}

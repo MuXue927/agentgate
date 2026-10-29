@@ -1,0 +1,15 @@
+id: invalid-missing-budget
+repo: D:/Projects/agentgate
+goal: Validate that a missing budget field points to the exact schema path.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not push.
+checks:
+  - name: tests
+    run: uv run pytest -q
+    expect: {exit: 0}
+budget:
+  max_minutes_per_round: 25
+  max_total_minutes: 90
+human_approval: {before_execute: false, before_merge: true}

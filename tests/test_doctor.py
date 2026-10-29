@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 
 from agentgate.doctor import (
-    DSH_EXE,
     DSH_CREDENTIAL_NOTE,
+    DSH_EXE,
     Probe,
     ProbeResult,
     build_probes,
@@ -13,7 +13,6 @@ from agentgate.doctor import (
     render_report,
 )
 from agentgate.validation import ModelPairError, require_different_models
-
 
 PROJECT = Path(r"D:\Projects\agentgate")
 
@@ -38,15 +37,32 @@ def result(
 class DoctorTests(unittest.TestCase):
     def test_tier_uses_model_difference_and_scaffold(self) -> None:
         cases = (
-            ({"executor_codex": True, "verifier_dsh": False, "verifier_codex": True, "verifier_pi": True}, "★★★"),
-            ({"executor_codex": True, "verifier_dsh": False, "verifier_codex": True, "verifier_pi": False}, "★★"),
+            (
+                {
+                    "executor_codex": True,
+                    "verifier_dsh": False,
+                    "verifier_codex": True,
+                    "verifier_pi": True,
+                },
+                "★★★",
+            ),
+            (
+                {
+                    "executor_codex": True,
+                    "verifier_dsh": False,
+                    "verifier_codex": True,
+                    "verifier_pi": False,
+                },
+                "★★",
+            ),
         )
         for statuses, expected_prefix in cases:
             with self.subTest(expected_prefix=expected_prefix):
                 report = collect_report(
                     PROJECT,
-                    probe_runner=lambda probe, cwd: result(
-                        probe, statuses[probe.key]
+                    probe_runner=lambda probe, cwd, statuses=statuses: result(
+                        probe,
+                        statuses[probe.key],
                     ),
                 )
                 self.assertTrue(report.tier.startswith(expected_prefix))
@@ -92,7 +108,7 @@ class DoctorTests(unittest.TestCase):
         def probe_result(probe: Probe, cwd: Path) -> ProbeResult:
             ok = statuses[probe.key]
             raw_error = (
-                'MISSING_CREDENTIAL: llm-deepseek: no API key for provider route '
+                "MISSING_CREDENTIAL: llm-deepseek: no API key for provider route "
                 '"deepseek-official"'
                 if probe.key == "verifier_dsh"
                 else ""

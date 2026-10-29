@@ -1,0 +1,22 @@
+{
+  "verdict": "PASS",
+  "summary": "Contradictory fixture.",
+  "checks": [
+    {
+      "name": "tests",
+      "status": "PASS",
+      "evidence": "1 passed"
+    }
+  ],
+  "defects": [
+    {
+      "id": "D1",
+      "severity": "blocking",
+      "where": "src/example.py:1",
+      "why": "The behavior is wrong.",
+      "reproduce": "uv run pytest -q tests/test_example.py",
+      "expect": "1 passed",
+      "actual": "1 failed"
+    }
+  ]
+}

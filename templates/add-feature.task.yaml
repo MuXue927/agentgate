@@ -1,0 +1,19 @@
+id: agentgate-demo-add-feature
+repo: D:/Projects/agentgate
+goal: |
+  Add one small feature while preserving the existing public behavior.
+  Update its tests and keep the change limited to the requested scope.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not change unrelated files.
+  - Do not push or merge.
+checks:
+  - name: tests
+    run: uv run pytest -q
+    expect: {exit: 0, stdout_not_contains: failed}
+  - name: diff-check
+    run: git diff --check
+    expect: {exit: 0}
+budget: {max_rounds: 3, max_minutes_per_round: 25, max_total_minutes: 90}
+human_approval: {before_execute: false, before_merge: true}

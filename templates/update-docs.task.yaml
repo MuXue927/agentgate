@@ -1,0 +1,19 @@
+id: agentgate-demo-update-docs
+repo: D:/Projects/agentgate
+goal: |
+  Update the requested documentation and keep examples consistent with the
+  current commands. Do not change runtime code for a documentation-only task.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not modify runtime code.
+  - Do not push or merge.
+checks:
+  - name: diff-check
+    run: git diff --check
+    expect: {exit: 0}
+  - name: documentation-changed
+    run: git diff --name-only
+    expect: {stdout_regex: '(^|\n)(docs/|README)'}
+budget: {max_rounds: 3, max_minutes_per_round: 15, max_total_minutes: 45}
+human_approval: {before_execute: false, before_merge: true}

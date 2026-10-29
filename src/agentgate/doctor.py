@@ -4,12 +4,11 @@ import os
 import shutil
 import subprocess
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Sequence
 
 from agentgate.validation import ModelPairError, evaluate_model_pair
-
 
 DSH_EXE = Path(r"D:\Software\DeepSeek Harness\DeepSeek Harness.exe")
 DSH_CLI = Path(
@@ -25,8 +24,7 @@ DSH_CREDENTIAL_NOTE = (
     "（DSH GUI 里的 key 在 headless 下读不到）"
 )
 PI_CREDENTIAL_NOTE = (
-    "Pi 验收方不可用：需配置智谱 key（ZHIPU_API_KEY），"
-    "再重开终端并运行 `ag doctor`。"
+    "Pi 验收方不可用：需配置智谱 key（ZHIPU_API_KEY），再重开终端并运行 `ag doctor`。"
 )
 
 
@@ -356,9 +354,7 @@ def render_report(report: DoctorReport, *, verbose: bool = False) -> str:
     ]
 
     def format_row(row: Sequence[str]) -> str:
-        return " | ".join(
-            value.ljust(widths[index]) for index, value in enumerate(row)
-        )
+        return " | ".join(value.ljust(widths[index]) for index, value in enumerate(row))
 
     lines = [
         format_row(headers),
