@@ -104,12 +104,15 @@ class DoctorTests(unittest.TestCase):
 
         self.assertTrue(report.required_ok)
         self.assertIn("DSH (optional verifier)", output)
-        self.assertIn(DSH_CREDENTIAL_NOTE, output)
-        self.assertIn("需设置 DEEPSEEK_API_KEY 环境变量", output)
-        self.assertIn("DSH GUI 里的 key 在 headless 下读不到", output)
+        self.assertIn("需 DEEPSEEK_API_KEY", output)
+        self.assertNotIn("MISSING_CREDENTIAL: llm-deepseek", output)
+
+        verbose_output = render_report(report, verbose=True)
+        self.assertIn("MISSING_CREDENTIAL: llm-deepseek", verbose_output)
+        self.assertIn(DSH_CREDENTIAL_NOTE, verbose_output)
 
     def test_same_model_pair_is_rejected(self) -> None:
-        with self.assertRaisesRegex(ModelPairError, "different models"):
+        with self.assertRaisesRegex(ModelPairError, "same model family"):
             require_different_models("deepseek-v4-flash", "deepseek-v4-flash")
 
     def test_dsh_probe_bypasses_cmd_and_is_optional(self) -> None:

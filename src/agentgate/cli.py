@@ -27,11 +27,18 @@ app = typer.Typer(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Print raw optional-backend output.",
+    ),
+) -> None:
     """Probe execution and verification backends."""
 
     report = collect_report(Path.cwd())
-    typer.echo(render_report(report))
+    typer.echo(render_report(report, verbose=verbose))
     if not report.required_ok:
         raise typer.Exit(code=1)
 

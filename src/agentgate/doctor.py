@@ -222,16 +222,14 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
     )
 
 
-def _repair_notes(project_dir: Path, results: Sequence[ProbeResult]) -> tuple[str, ...]:
+def _required_repair_notes(
+    project_dir: Path, results: Sequence[ProbeResult]
+) -> tuple[str, ...]:
     notes: list[str] = []
     by_key = {result.probe.key: result for result in results}
     codex_command = (
         f'codex exec --skip-git-repo-check -C "{project_dir}" '
         f'-m {EXECUTOR_MODEL} "reply OK"'
-    )
-    dsh_command = (
-        f'$env:ELECTRON_RUN_AS_NODE="1"; & "{DSH_EXE}" --expose-internals '
-        f'"{DSH_CLI}" headless "reply OK" --json'
     )
 
     if not by_key["executor_codex"].ok:
@@ -246,14 +244,22 @@ def _repair_notes(project_dir: Path, results: Sequence[ProbeResult]) -> tuple[st
             "Default Codex verifier failed. Configure its non-DeepSeek provider with "
             "ocx, verify with `ocx status`, then retry `ag doctor`."
         )
-    dsh = by_key["verifier_dsh"]
-    if not dsh.ok:
-        if "MISSING_CREDENTIAL" in f"{dsh.stdout}\n{dsh.stderr}":
-            notes.append(DSH_CREDENTIAL_NOTE)
-        notes.append(f"DSH 直接调用命令：{dsh_command}")
-    if not by_key["verifier_pi"].ok:
-        notes.append(PI_CREDENTIAL_NOTE)
     return tuple(notes)
+
+
+def _optional_failure_summary(result: ProbeResult) -> str:
+    raw = f"{result.stdout}\n{result.stderr}"
+    if result.probe.key == "verifier_dsh" and "MISSING_CREDENTIAL" in raw:
+        return "需 DEEPSEEK_API_KEY"
+    if result.probe.key == "verifier_pi":
+        return "需智谱 key（ZHIPU_API_KEY）"
+    if result.error:
+        return result.error
+    first_line = next(
+        (line.strip() for line in raw.splitlines() if line.strip()),
+        "探测失败",
+    )
+    return first_line[:160]
 
 
 def _tier(results: Sequence[ProbeResult]) -> str:
@@ -315,7 +321,7 @@ def collect_report(
         results=results,
         tier=_tier(results),
         required_ok=required_ok,
-        repair_notes=_repair_notes(project_dir, results),
+        repair_notes=_required_repair_notes(project_dir, results),
         model_pair_error=model_pair_error,
     )
 
@@ -329,7 +335,7 @@ def _display_command(command: Sequence[str]) -> str:
     return " ".join(quote(part) for part in command)
 
 
-def render_report(report: DoctorReport) -> str:
+def render_report(report: DoctorReport, *, verbose: bool = False) -> str:
     headers = ("backend", "role", "command", "result", "time")
     rows = []
     for result in report.results:
@@ -362,8 +368,14 @@ def render_report(report: DoctorReport) -> str:
 
     failures = [result for result in report.results if not result.ok]
     if failures:
-        lines.extend(("", "Probe failures (raw output):"))
+        lines.extend(("", "Probe failures:"))
         for result in failures:
+            if not result.probe.required and not verbose:
+                lines.append(
+                    f"[{result.probe.backend}] FAIL — "
+                    f"{_optional_failure_summary(result)}"
+                )
+                continue
             status = (
                 f"exit={result.exit_code}"
                 if result.exit_code is not None
@@ -380,6 +392,24 @@ def render_report(report: DoctorReport) -> str:
             )
             if result.error:
                 lines.append(f"error: {result.error}")
+
+    if verbose:
+        dsh = next(
+            (result for result in report.results if result.probe.key == "verifier_dsh"),
+            None,
+        )
+        pi = next(
+            (result for result in report.results if result.probe.key == "verifier_pi"),
+            None,
+        )
+        optional_notes: list[str] = []
+        if dsh is not None and not dsh.ok:
+            optional_notes.append(DSH_CREDENTIAL_NOTE)
+        if pi is not None and not pi.ok:
+            optional_notes.append(PI_CREDENTIAL_NOTE)
+        if optional_notes:
+            lines.extend(("", "Optional verifier notes:"))
+            lines.extend(f"- {note}" for note in optional_notes)
 
     if report.repair_notes:
         lines.extend(("", "Repair commands / notes:"))
