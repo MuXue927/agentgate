@@ -16,6 +16,7 @@ from agentgate.spec import (
     load_task,
     validate_verdict_document,
 )
+from agentgate.status import clear_markers, set_status, write_marker
 from agentgate.validation import require_different_models
 
 
@@ -335,18 +336,12 @@ def _text(value: str | bytes | None) -> str:
 
 def _mark_blocked(round_dir: Path, reason: str) -> None:
     run_dir = round_dir.parent
-    for marker in ("DONE", "FAILED"):
-        stale = run_dir / marker
-        if stale.exists():
-            stale.unlink()
-    (run_dir / "BLOCKED").write_text(reason, encoding="utf-8")
+    write_marker(run_dir, "BLOCKED", reason)
+    set_status(run_dir, "blocked")
 
 
 def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
-    for name in ("DONE", "FAILED", "BLOCKED"):
-        marker = run_dir / name
-        if marker.exists():
-            marker.unlink()
+    clear_markers(run_dir)
     verdict = round_dir / "verdict.json"
     if verdict.exists():
         verdict.unlink()
@@ -360,6 +355,7 @@ def verify_run(
     runs_root: Path | None = None,
     adapter: CodexAdapter | None = None,
     command_runner: CommandRunner = _run_command,
+    force: bool = False,
 ) -> VerificationOutcome:
     if not task_id or Path(task_id).name != task_id:
         raise VerificationError(f"Invalid task id: {task_id!r}")
@@ -372,8 +368,19 @@ def verify_run(
         raise VerificationError(f"Missing task snapshot: {task_path}")
     if not state_path.is_file():
         raise VerificationError(f"Missing state artifact: {state_path}")
-    if not (run_dir / "EXECUTED").is_file():
-        raise VerificationError(f"Run is not marked EXECUTED: {run_dir}")
+    existing_verdict_path = round_dir / "verdict.json"
+    existing_verdict: dict[str, Any] | None = None
+    if existing_verdict_path.is_file():
+        loaded = json.loads(existing_verdict_path.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            existing_verdict = loaded
+    if not force and (
+        (run_dir / "DONE").is_file()
+        or (existing_verdict is not None and existing_verdict.get("verdict") == "PASS")
+    ):
+        raise VerificationError(
+            "Run already passed verification; use `ag verify --force` to rerun."
+        )
 
     task = load_task(task_path)
     state = json.loads(state_path.read_text(encoding="utf-8"))
@@ -473,9 +480,12 @@ def verify_run(
         encoding="utf-8",
     )
     if verdict["verdict"] == "PASS":
-        (run_dir / "DONE").write_text("", encoding="utf-8")
+        write_marker(run_dir, "DONE")
+        set_status(run_dir, "done")
     elif verdict["verdict"] == "BLOCKED":
         _mark_blocked(round_dir, verdict.get("summary", "verifier returned BLOCKED"))
+    else:
+        set_status(run_dir, "failed")
     return VerificationOutcome(
         task_id=task_id,
         round_dir=round_dir,

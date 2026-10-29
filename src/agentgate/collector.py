@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agentgate.adapters.codex import RunResult
 from agentgate.spec import CheckSpec, TaskSpec
+from agentgate.status import write_marker
 from agentgate.validation import ModelPair
 from agentgate.workspace import Worktree
 
@@ -333,7 +334,7 @@ def collect_success(
         finished_at=finished_at,
     )
     _write_json(round_dir / "state.json", state)
-    (round_dir.parent / "EXECUTED").write_text("", encoding="utf-8")
+    write_marker(round_dir.parent, "EXECUTED")
     return CollectionResult(round_dir=round_dir, state=state, checks=checks)
 
 
@@ -359,9 +360,9 @@ def collect_blocked(
         finished_at=finished_at,
     )
     _write_json(round_dir / "state.json", state)
-    marker = round_dir.parent / "BLOCKED"
-    marker.write_text(
+    write_marker(
+        round_dir.parent,
+        "BLOCKED",
         reason or f"{result.error_class.value}: {result.stderr}",
-        encoding="utf-8",
     )
     return CollectionResult(round_dir=round_dir, state=state, checks=())

@@ -9,8 +9,10 @@ import pytest
 from agentgate.adapters.codex import ErrorClass, RunResult
 from agentgate.collector import collect_success, utc_now
 from agentgate.spec import load_task
+from agentgate.status import MARKERS
 from agentgate.validation import evaluate_model_pair
 from agentgate.verifier import (
+    VerificationError,
     extract_first_json_object,
     extract_verdict_json,
     verify_run,
@@ -209,6 +211,9 @@ def test_pass_writes_verdict_and_done(
         assert outcome.before_status == outcome.after_status
         assert (outcome.round_dir / "verdict.json").is_file()
         assert (outcome.round_dir.parent / "DONE").is_file()
+        assert [
+            name for name in MARKERS if (outcome.round_dir.parent / name).exists()
+        ] == ["DONE"]
         assert "EXECUTOR NATURAL SUMMARY" not in (
             outcome.round_dir / "verifier_input.md"
         ).read_text(encoding="utf-8")
@@ -387,6 +392,49 @@ def test_output_last_message_file_is_authoritative(
         assert "tool" in (
             outcome.round_dir / "verifier-attempt-1.raw-stdout.txt"
         ).read_text(encoding="utf-8")
+    finally:
+        cleanup_worktree(
+            tmp_path / "target",
+            worktree,
+            "ag/verifier-fixture-r1",
+        )
+
+
+def test_passed_run_requires_force_for_reverify(
+    tmp_path: Path,
+) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+    calls = 0
+
+    def passing(command: tuple[str, ...], cwd: Path, timeout: float):
+        nonlocal calls
+        calls += 1
+        return completed(pass_json())
+
+    try:
+        first = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=passing,
+        )
+        assert first.verdict["verdict"] == "PASS"
+
+        with pytest.raises(VerificationError, match="already passed"):
+            verify_run(
+                "verifier-fixture",
+                runs_root=runs_root,
+                command_runner=passing,
+            )
+        assert calls == 1
+
+        forced = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=passing,
+            force=True,
+        )
+        assert forced.verdict["verdict"] == "PASS"
+        assert calls == 2
     finally:
         cleanup_worktree(
             tmp_path / "target",

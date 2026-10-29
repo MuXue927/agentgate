@@ -167,11 +167,18 @@ def verify(
         str,
         typer.Argument(help="Run / task id under runs/."),
     ],
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Re-run verification even when the run already passed.",
+        ),
+    ] = False,
 ) -> None:
     """Verify an executed round once, without defect feedback or retry rounds."""
 
     try:
-        outcome = verify_run(task_id)
+        outcome = verify_run(task_id, force=force)
     except (VerificationError, SpecError, ModelPairError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None

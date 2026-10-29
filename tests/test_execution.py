@@ -188,6 +188,19 @@ def test_no_changes_blocks_without_executed_or_verifier_input(
         )
 
 
+def test_new_marker_removes_previous_marker(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "EXECUTED").write_text("", encoding="utf-8")
+    (run_dir / "state.json").write_text('{"status": "executed"}\n', encoding="utf-8")
+    from agentgate.status import write_marker
+
+    write_marker(run_dir, "DONE")
+
+    assert (run_dir / "DONE").is_file()
+    assert not (run_dir / "EXECUTED").exists()
+
+
 def test_nonzero_executor_writes_blocked_without_verifier_input(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
