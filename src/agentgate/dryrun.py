@@ -44,7 +44,7 @@ def _bullet_lines(values: Iterable[str]) -> str:
     return "\n".join(f"- {value}" for value in values)
 
 
-def _execution_prompt(task: TaskSpec, worktree: Worktree) -> str:
+def build_execution_prompt(task: TaskSpec, worktree: Worktree) -> str:
     return (
         "You are the implementation executor. Work only inside this worktree:\n"
         f"{worktree.path}\n\n"
@@ -80,7 +80,7 @@ def build_executor_command(task: TaskSpec, worktree: Worktree) -> tuple[str, ...
         str(worktree.path),
         "-m",
         task.executor.model,
-        _execution_prompt(task, worktree),
+        build_execution_prompt(task, worktree),
     )
 
 

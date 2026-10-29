@@ -7,8 +7,10 @@ from typing import Annotated
 import typer
 
 from agentgate import __version__
+from agentgate.collector import CollectorError
 from agentgate.doctor import collect_report, render_report
 from agentgate.dryrun import prepare_dry_run
+from agentgate.execution import execute_round
 from agentgate.spec import SpecError
 from agentgate.validation import ModelPairError
 from agentgate.workspace import WorkspaceError, clean_agent_worktrees
@@ -82,20 +84,44 @@ def run(
         ),
     ] = False,
 ) -> None:
-    """Prepare an AgentGate task."""
+    """Execute one task round or preview it with --dry-run."""
 
-    if not dry_run:
-        typer.echo(
-            "Real execution is not implemented in step 2; use --dry-run.",
-            err=True,
-        )
-        raise typer.Exit(code=2)
     try:
-        result = prepare_dry_run(task, allow_self=allow_self)
-    except (SpecError, ModelPairError, WorkspaceError, ValueError) as exc:
+        if dry_run:
+            result = prepare_dry_run(task, allow_self=allow_self)
+        else:
+            outcome = execute_round(task, allow_self=allow_self)
+    except (
+        SpecError,
+        ModelPairError,
+        WorkspaceError,
+        CollectorError,
+        ValueError,
+    ) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
-    typer.echo(result.render())
+    if dry_run:
+        typer.echo(result.render())
+        return
+    if outcome.blocked:
+        typer.echo(
+            f"Round 1 BLOCKED → {outcome.collection.round_dir}",
+            err=True,
+        )
+        executor_state = outcome.collection.state.get("executor")
+        error_class = (
+            executor_state.get("error_class", "UNKNOWN")
+            if isinstance(executor_state, dict)
+            else "UNKNOWN"
+        )
+        typer.echo(error_class, err=True)
+        typer.echo("Raw stderr:", err=True)
+        typer.echo(outcome.result.stderr, err=True)
+        raise typer.Exit(code=2)
+    relative = outcome.collection.round_dir.relative_to(
+        outcome.collection.round_dir.parents[2]
+    )
+    typer.echo(f"Round 1 executed → {relative}")
 
 
 @app.command()
