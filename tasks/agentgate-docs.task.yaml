@@ -1,0 +1,79 @@
+id: agentgate-docs
+repo: D:/Projects/agentgate
+goal: |
+  Restructure the project documentation into a complete, navigable set under docs/.
+
+  1) Move the five root-level STEP-*.md reports into docs/steps/ and rename them
+     exactly like this (content unchanged, only path and filename change):
+       STEP-1-报告.md -> docs/steps/step-1-doctor.md
+       STEP-2-报告.md -> docs/steps/step-2-schema.md
+       STEP-3-报告.md -> docs/steps/step-3-executor.md
+       STEP-4-报告.md -> docs/steps/step-4-verifier.md
+       STEP-5-报告.md -> docs/steps/step-5-loop.md
+
+  2) Keep docs/design.md as the canonical design reference. Do not remove sections.
+
+  3) Write docs/acceptance.md: the final v0.2 acceptance record. Cover the six
+     delivery criteria, how each was verified, and the current double-blind tier.
+     At least 800 characters.
+
+  4) Write docs/index.md as the entry point: what this project is, the recommended
+     reading order, and a working relative link to every document under docs/
+     (including each file in docs/steps/). At least 800 characters.
+
+  5) Update README.md so that no local link is left broken after the STEP files move.
+
+  6) Add a "文件结构" section to README.md that lists every top-level directory and
+     states, on the same line, what it is for. Cover at least these ten:
+       src/  tests/  schemas/  templates/  taskfiles/  tasks/  docs/
+       adapters/  runs/  wt/
+     "runs/" and "wt/" are git-ignored runtime directories and will not exist in a
+     fresh checkout -- still describe them. A bare name with no explanation does not
+     satisfy this requirement.
+
+  Do not change source code, tests, or schemas. Do not modify git history.
+  Do not push or merge.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Only create or modify files under docs/, move the five root-level STEP-*.md files,
+    and edit README.md to fix links and add the file-structure section.
+  - Do not touch src/, tests/, schemas/, templates/, taskfiles/, tasks/, pyproject.toml, or AGENTS.md.
+  - Do not delete docs/design.md content; you may add a header but not remove sections.
+  - Do not push or merge.
+  - Do not run git commit or git add.
+checks:
+  - name: docs-exist
+    run: python -c "import pathlib,sys; need=['docs/index.md','docs/design.md','docs/acceptance.md','docs/steps/step-1-doctor.md','docs/steps/step-2-schema.md','docs/steps/step-3-executor.md','docs/steps/step-4-verifier.md','docs/steps/step-5-loop.md']; miss=[p for p in need if not pathlib.Path(p).is_file()]; print('missing:',miss); sys.exit(1 if miss else 0)"
+    expect: {exit: 0}
+
+  - name: docs-substantive
+    run: python -c "import pathlib,sys; fs=[p for p in pathlib.Path('docs').rglob('*.md')]; small=[str(p) for p in fs if len(p.read_text(encoding='utf-8'))<800]; print('too small:',small); sys.exit(1 if small else 0)"
+    expect: {exit: 0}
+
+  - name: steps-moved-out-of-root
+    run: python -c "import pathlib,sys; left=list(pathlib.Path('.').glob('STEP-*.md')); print('left in root:',[str(p) for p in left]); sys.exit(1 if left else 0)"
+    expect: {exit: 0}
+
+  - name: index-links-resolve
+    run: python -c "import pathlib,re,sys; t=pathlib.Path('docs/index.md').read_text(encoding='utf-8'); ls=[l for l in re.findall(r'\]\(([^)#]+)',t) if not l.startswith('http')]; miss=[l for l in ls if not (pathlib.Path('docs')/l).exists() and not pathlib.Path(l).exists()]; print('missing links:',miss); sys.exit(1 if miss else 0)"
+    expect: {exit: 0}
+
+  - name: readme-links-still-valid
+    run: python -c "import pathlib,re,sys; t=pathlib.Path('README.md').read_text(encoding='utf-8'); ls=[l for l in re.findall(r'\]\(([^)#]+)',t) if not l.startswith('http')]; miss=[l for l in ls if not pathlib.Path(l).exists()]; print('missing:',miss); sys.exit(1 if miss else 0)"
+    expect: {exit: 0}
+
+  - name: readme-structure
+    run: python -c "import pathlib,sys; t=pathlib.Path('README.md').read_text(encoding='utf-8'); need=['src/','tests/','schemas/','templates/','taskfiles/','tasks/','docs/','adapters/','runs/','wt/']; bad=[]; [bad.append(d) for d in need if not any((i:=l.find(d))>=0 and len(l[i+len(d):].strip())>=2 for l in t.splitlines())]; has_head=any(k in t for k in ('文件结构','目录结构','项目结构')); print('structure heading:',has_head); print('undocumented dirs:',bad); sys.exit(0 if has_head and not bad else 1)"
+    expect: {exit: 0}
+
+  - name: no-source-touched
+    run: python -c "import subprocess,sys; out=subprocess.run(['git','status','--porcelain'],capture_output=True,text=True).stdout; bad=[l for l in out.splitlines() if any(k in l for k in ('src/','tests/','schemas/','templates/','taskfiles/','tasks/','pyproject'))]; print('forbidden changes:',bad); sys.exit(1 if bad else 0)"
+    expect: {exit: 0}
+
+  - name: no-whitespace-errors
+    run: git diff --check
+    expect: {exit: 0}
+
+budget: {max_rounds: 3, max_minutes_per_round: 20, max_total_minutes: 60}
+human_approval: {before_execute: false, before_merge: true}
