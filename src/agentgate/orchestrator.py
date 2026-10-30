@@ -518,9 +518,7 @@ def _drive(
         if verification.mechanical is not None:
             current_round["mechanical"] = verification.mechanical.as_document()
             if not verification.mechanical.ok:
-                names = "、".join(
-                    item.name for item in verification.mechanical.failed
-                )
+                names = "、".join(item.name for item in verification.mechanical.failed)
                 push(f"Round {round_no}: 机检未通过：{names}")
         if float(state["elapsed_seconds"]) > task.budget.max_total_minutes * 60:
             reason = (

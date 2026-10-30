@@ -134,9 +134,7 @@ def model_verdict(verdict: str) -> str:
         {
             "verdict": "FAIL",
             "summary": "The file content does not match.",
-            "checks": [
-                {"name": "hello-content", "status": "FAIL", "evidence": "ok"}
-            ],
+            "checks": [{"name": "hello-content", "status": "FAIL", "evidence": "ok"}],
             "defects": [
                 {
                     "id": "D1",

@@ -165,7 +165,9 @@ def build_mechanical_verdict(
             {
                 "name": name,
                 "status": "FAIL" if reason is not None else "PASS",
-                "evidence": reason if reason is not None else f"exit={output.exit_code}",
+                "evidence": reason
+                if reason is not None
+                else f"exit={output.exit_code}",
             }
         )
     names = ", ".join(item.name for item in result.failed)
