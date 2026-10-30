@@ -10,6 +10,7 @@ from agentgate.adapters.codex import (
     ErrorClass,
     RunResult,
     TokenUsage,
+    resolve_executable,
 )
 from agentgate.spec import TaskSpec
 from agentgate.validation import require_different_models
@@ -40,12 +41,14 @@ def run(
         verifier_scaffold=task.verifier.harness,
     )
     selected = adapter or CodexAdapter()
-    command = selected.build_cmd(
-        prompt,
-        task.executor.model,
-        cwd=cwd,
-        readonly=False,
-        schema=None,
+    command = resolve_executable(
+        selected.build_cmd(
+            prompt,
+            task.executor.model,
+            cwd=cwd,
+            readonly=False,
+            schema=None,
+        )
     )
     timeout_s = task.budget.max_minutes_per_round * 60
     started = time.monotonic()

@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 
 from agentgate import runner
-from agentgate.adapters.codex import Adapter, CodexAdapter, ErrorClass, classify_error
+from agentgate.adapters.codex import (
+    Adapter,
+    CodexAdapter,
+    ErrorClass,
+    classify_error,
+    resolve_executable,
+)
 from agentgate.spec import load_task
 from agentgate.validation import ModelPairError
 
@@ -71,7 +77,7 @@ def test_runner_passes_no_shell_and_records_duration(
     assert result.error_class is ErrorClass.OK
     assert result.stdout == "ok\n"
     assert result.duration_s >= 0
-    assert calls[0][0][0] == "codex"
+    assert Path(calls[0][0][0]).stem.lower() == "codex"
     assert "shell" not in calls[0][1]
     assert calls[0][1]["timeout"] == task.budget.max_minutes_per_round * 60
 
@@ -92,3 +98,33 @@ def test_runner_rejects_same_family_before_subprocess(
         runner.run(task, "do work", cwd=ROOT)
 
     assert not called
+
+
+def test_resolve_executable_finds_windows_shim(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`codex` is an npm .cmd shim; CreateProcess cannot run it directly.
+
+    Regression: build_cmd returned the bare name "codex", so
+    subprocess.run(["codex", ...]) raised FileNotFoundError [WinError 2] even
+    though "codex" worked in a shell.
+    """
+    import os
+
+    shim = tmp_path / "faketool.cmd"
+    shim.write_text("@echo off\r\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+
+    resolved = resolve_executable(["faketool", "exec", "--flag"])
+
+    assert Path(resolved[0]).name.lower() == "faketool.cmd"
+    assert resolved[1:] == ["exec", "--flag"]
+
+
+def test_resolve_executable_passthrough_for_absolute_and_unknown() -> None:
+    absolute = str(ROOT / "pyproject.toml")
+    assert resolve_executable([absolute, "x"]) == [absolute, "x"]
+    assert resolve_executable(["definitely-not-a-real-binary-xyz", "y"])[0] == (
+        "definitely-not-a-real-binary-xyz"
+    )

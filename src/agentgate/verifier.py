@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agentgate.adapters.codex import CodexAdapter
+from agentgate.adapters.codex import CodexAdapter, resolve_executable
 from agentgate.collector import CheckOutput, check_slug, render_verifier_input
 from agentgate.spec import (
     PROJECT_ROOT,
@@ -62,7 +62,7 @@ def _run_command(
     timeout_s: float,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        list(command),
+        resolve_executable(command),
         cwd=cwd,
         capture_output=True,
         text=True,

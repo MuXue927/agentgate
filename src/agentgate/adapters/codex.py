@@ -1,11 +1,34 @@
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+
+def resolve_executable(argv: Sequence[str]) -> list[str]:
+    """Resolve argv[0] through PATH so Windows can spawn npm shims.
+
+    `codex` from npm is a `.cmd` wrapper. CreateProcess cannot execute a .cmd
+    directly, so `subprocess.run(["codex", ...])` fails with
+    FileNotFoundError [WinError 2] even though `codex` works in a shell.
+    shutil.which honours PATHEXT and returns the real `codex.CMD` path.
+    """
+
+    resolved = list(argv)
+    if not resolved:
+        return resolved
+    first = resolved[0]
+    if Path(first).is_absolute():
+        return resolved
+    found = shutil.which(first)
+    if found:
+        resolved[0] = found
+    return resolved
 
 
 class ErrorClass(StrEnum):
