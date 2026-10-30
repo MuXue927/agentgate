@@ -1,0 +1,16 @@
+id: ag-resume-demo
+repo: D:/Projects/<your-repo>
+goal: |
+  In the repository root, create resume-number.txt containing the first prime number.
+  Do not modify any other file.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not modify files other than resume-number.txt.
+  - Do not push or merge.
+checks:
+  - name: resume-number-matches
+    run: type resume-number.txt
+    expect: {exit: 0, stdout_contains: "3"}
+budget: {max_rounds: 2, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}

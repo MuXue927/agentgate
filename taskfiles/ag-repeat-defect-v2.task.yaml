@@ -1,0 +1,17 @@
+id: ag-repeat-defect-v2
+repo: D:/Projects/<your-repo>
+goal: |
+  In the repository root, ensure retry-v2.txt exists and append one new line
+  containing the current UTC timestamp on every execution.
+  Do not modify any other file.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Only retry-v2.txt may change.
+  - Do not push or merge.
+checks:
+  - name: permanently-failing-check
+    run: cmd /c exit 1
+    expect: {exit: 0}
+budget: {max_rounds: 2, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}

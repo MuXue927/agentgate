@@ -1,0 +1,13 @@
+id: ag-sandbox-same-family
+repo: D:/Projects/<your-repo>
+goal: This task must be rejected before any worktree is created.
+executor: {harness: codex, model: deepseek-v4-pro}
+verifier: {harness: codex, model: deepseek-flash}
+constraints:
+  - Do not push.
+checks:
+  - name: noop
+    run: type .gitignore
+    expect: {exit: 0}
+budget: {max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}

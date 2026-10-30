@@ -1,0 +1,16 @@
+id: ag-sandbox-hello-v2
+repo: D:/Projects/<your-repo>
+goal: |
+  In the repository root, create hello.txt containing exactly ok.
+  Do not modify any other file.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not modify files other than hello.txt.
+  - Do not push or merge.
+checks:
+  - name: hello-content
+    run: type hello.txt
+    expect: {exit: 0, stdout_contains: ok}
+budget: {max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}

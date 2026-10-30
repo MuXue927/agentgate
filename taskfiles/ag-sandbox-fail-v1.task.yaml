@@ -1,0 +1,16 @@
+id: ag-sandbox-fail-v1
+repo: D:/Projects/<your-repo>
+goal: |
+  In the repository root, create hello-fail.txt containing exactly ok.
+  Do not modify any other file.
+executor: {harness: codex, model: deepseek-v4-flash}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
+constraints:
+  - Do not modify files other than hello-fail.txt.
+  - Do not push or merge.
+checks:
+  - name: hello-must-be-ok2
+    run: findstr /x /c:"ok2" hello-fail.txt
+    expect: {exit: 0}
+budget: {max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}
