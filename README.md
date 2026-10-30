@@ -136,6 +136,25 @@ Get-Content runs/<task-id>/report.md
 git merge --no-ff ag/<task-id>-r<N>
 ```
 
-逐步实现和验证据见
-[STEP-5-报告.md](STEP-5-报告.md) 与
-[AgentGate v0.2 实现报告](docs/AgentGate-v0.2-实现报告.md)。
+## 文件结构
+
+| 目录 | 用途 |
+|---|---|
+| `src/` | `ag` CLI 的 Python 实现，包含规格加载、worktree、执行、验收、轮次编排与报告模块。 |
+| `tests/` | 单元测试、CLI 集成测试与失败路径夹具；不存放运行时数据。 |
+| `schemas/` | `task.yaml` 与验收方 `verdict.json` 的 JSON Schema。 |
+| `templates/` | 可复制的四类任务模板，使用前必须填写真实仓库与验收检查。 |
+| `taskfiles/` | 开发和沙箱验证使用过的任务样例，记录真实轮次与中断恢复场景。 |
+| `tasks/` | 针对 AgentGate 项目自身执行的文档或维护任务定义。 |
+| `docs/` | 设计、验收记录、索引和逐步实现证据；入口是 `docs/index.md`。 |
+| `adapters/` | 顶层兼容适配器包，保留给历史导入路径；实际实现位于 `src/agentgate/adapters/`。 |
+| `runs/` | Git 忽略的运行时目录，保存每轮工件、状态、verdict 与最终报告。 |
+| `wt/` | Git 忽略的运行时目录，保存目标仓库内部的隔离 worktree。 |
+
+## 继续阅读
+
+文档入口为 [docs/index.md](docs/index.md)。最终验收记录见
+[docs/acceptance.md](docs/acceptance.md)，完整设计与实现摘要分别见
+[docs/design.md](docs/design.md) 和
+[AgentGate v0.2 实现报告](docs/AgentGate-v0.2-实现报告.md)。逐步实现和
+验证据见 [STEP 5 报告](docs/steps/step-5-loop.md)。
