@@ -103,8 +103,8 @@ human_approval: {before_execute: false, before_merge: true}
   「提示词约束 + 验收前后 `git status --porcelain` 复核」。复核只能看 worktree
   内部，管不到 worktree 之外——这种环境下跑任务请务必先提交工作树，
   事后用 `git status` 核对。
-  `ag doctor` 的 `Codex (tool execution, read-only sandbox)` 一行专门探这个：
-  它 FAIL 就说明必须加 `sandbox: danger-full-access`。
+  `ag doctor` 的 `Codex (tool execution, danger-full-access)` 一行专门探这个：
+  它 FAIL 说明 Codex 完全跑不了命令。
 - **沙箱无网络**：执行代理不能自己 `uv add` / `uv sync`。需要新依赖时，
   在报告里写清楚并由人代跑。
 - **worktree 必须在项目内部**：固定在目标仓库的 `wt/<task>-r<N>`。
@@ -145,13 +145,17 @@ git merge --no-ff ag/<task-id>-r<N>
 | `schemas/` | `task.yaml` 与验收方 `verdict.json` 的 JSON Schema。 |
 | `templates/` | 可复制的四类任务模板，使用前必须填写真实仓库与验收检查。 |
 | `taskfiles/` | 开发和沙箱验证使用过的任务样例，记录真实轮次与中断恢复场景。 |
-| `tasks/` | 针对 AgentGate 项目自身执行的文档或维护任务定义。 |
+| `tasks/` | 可以公开的任务定义。含公司名、内部链接或个人数据的任务放仓库外（见 `tasks/README.md`）。 |
 | `docs/` | 设计、验收记录、索引和逐步实现证据；入口是 `docs/index.md`。 |
 | `adapters/` | 顶层兼容适配器包，保留给历史导入路径；实际实现位于 `src/agentgate/adapters/`。 |
 | `runs/` | Git 忽略的运行时目录，保存每轮工件、状态、verdict 与最终报告。 |
 | `wt/` | Git 忽略的运行时目录，保存目标仓库内部的隔离 worktree。 |
 
 ## 继续阅读
+
+**写第一个任务之前先读 [如何写 task.yaml](docs/task-yaml-guide.md)**：九个字段
+逐一说明、`checks` 的写法准则、五类任务模板、反模式清单与失败诊断表，末尾
+附 `tasks/agentgate-docs.task.yaml` 的逐段解析。
 
 文档入口为 [docs/index.md](docs/index.md)。最终验收记录见
 [docs/acceptance.md](docs/acceptance.md)，完整设计与实现摘要分别见

@@ -1,0 +1,41 @@
+name: ci
+
+# 为什么跑在 windows-latest 而不是 ubuntu（和 JobTempo 不同）：
+# 本工具的适配层专门处理 Windows 语义——codex 是 npm 的 .cmd 垫片
+# （CreateProcess 不能直接 spawn）、worktree 必须建在仓库内部、
+# Codex 的沙箱在这台平台上还有已知缺陷。tests/test_adapter_runner.py
+# 里就有直接断言 .cmd 解析的用例，在 Linux 上会假失败。
+#
+# 仓库是 public，Actions 分钟数不计费，跑 Windows runner 没有成本顾虑。
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  lint-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 同步依赖（含 dev 组）
+        run: uv sync --frozen --group dev
+
+      # docs/ 已在 pyproject 的 [tool.ruff].extend-exclude 里排除：
+      # 方案稿里的 python 代码块是示例/伪代码，不是要执行的代码。
+      - name: ruff check
+        run: uv run ruff check
+
+      - name: ruff format --check
+        run: uv run ruff format --check
+
+      # -rs 把 skip 原因打出来。agentgate 的测试全部走 mock，不调用真实
+      # codex/git 以外的外部依赖，因此期望是 0 skipped。
+      - name: pytest
+        run: uv run pytest -q -rs

@@ -27,3 +27,9 @@ dist/
 
 # 本地 Agent 约定（不入库）
 /AGENTS.md
+
+# 含敏感数据的任务定义（公司名、内部链接、个人信息）不入库。
+# 首选做法是把它们放在仓库外，例如 D:/Projects/ag-tasks/；
+# 这两条是双保险，万一有人放进仓库也拦住。
+tasks.local/
+*.local.task.yaml
