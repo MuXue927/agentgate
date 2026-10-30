@@ -608,3 +608,37 @@ def test_self_repo_without_allow_self_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(SpecError, match="points to AgentGate itself"):
         start_task(task, runs_root=tmp_path / "runs", usage_provider=usage)
+
+
+def test_resume_force_validates_before_destroying(tmp_path: Path) -> None:
+    """Regression: resume --force renamed the run away before validating.
+
+    A task that cannot start (self-pointing repo without --allow-self) used to
+    lose its old run archive permanently, because clean_agent_worktrees() and
+    shutil.rmtree() ran before start_task() validated anything.
+    """
+    project_root = Path(__file__).resolve().parents[1]
+    task = make_task(tmp_path, project_root)
+    runs_root = tmp_path / "runs"
+    run_dir = runs_root / "loop-fixture"
+    run_dir.mkdir(parents=True)
+    (run_dir / "task.yaml").write_text(
+        task.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (run_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "status": "blocked",
+                "repo": str(project_root),
+                "effective_max_rounds": 1,
+                "rounds": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SpecError, match="points to AgentGate itself"):
+        resume_task("loop-fixture", force=True, runs_root=runs_root)
+
+    assert run_dir.is_dir(), "failed resume must not destroy the old run"
+    assert (run_dir / "state.json").is_file()

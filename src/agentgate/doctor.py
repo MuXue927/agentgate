@@ -25,9 +25,9 @@ PROBE_PROMPT = "reply OK"
 TOOL_PROBE_TEXT = "agentgate-probe"
 TOOL_PROBE_PROMPT = f"Run this shell command and then reply with its exact output: echo {TOOL_PROBE_TEXT}"
 TOOL_PROBE_NOTE = (
-    "Codex 在此沙箱模式下无法执行任何 shell 命令（已知 Windows 缺陷，"
-    "见 README「常见坑」）。请在 task.yaml 里给 executor/verifier 显式设置 "
-    "`sandbox: danger-full-access`，或参考 §5.3 的三个上游 issue 等待修复。"
+    "Codex 无法执行任何 shell 命令（Windows 沙箱缺陷，见 README「常见坑」）。"
+    "任务需显式设置 `sandbox: danger-full-access`；若这样仍失败，说明 Codex 侧"
+    "完全不可用，参考 §5.3 的三个上游 issue。"
 )
 DSH_CREDENTIAL_NOTE = (
     "DSH 验收方不可用：需设置 DEEPSEEK_API_KEY 环境变量"
@@ -53,6 +53,9 @@ class Probe:
     # Needed for tool-execution probes: a model blocked by the sandbox still
     # exits 0 after explaining that it could not run anything.
     expect_stdout: str = ""
+    # The Codex Windows sandbox is intermittent, so tool probes retry once
+    # before being declared broken.
+    attempts: int = 1
 
 
 @dataclass(frozen=True)
@@ -93,6 +96,21 @@ def _windows_executable(command: Sequence[str], *, cwd: Path) -> list[str]:
 def run_probe(probe: Probe, cwd: Path) -> ProbeResult:
     command = _windows_executable(probe.command, cwd=cwd)
     started = time.monotonic()
+    result: ProbeResult | None = None
+    for attempt in range(1, max(1, probe.attempts) + 1):
+        result = _run_probe_once(probe, command, cwd, started)
+        if result.ok or attempt >= probe.attempts:
+            break
+    assert result is not None
+    return result
+
+
+def _run_probe_once(
+    probe: Probe,
+    command: list[str],
+    cwd: Path,
+    started: float,
+) -> ProbeResult:
     try:
         completed = subprocess.run(
             command,
@@ -180,7 +198,7 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
         "-C",
         project,
         "-s",
-        "read-only",
+        "danger-full-access",
         "-m",
         EXECUTOR_MODEL,
         TOOL_PROBE_PROMPT,
@@ -224,7 +242,7 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
         ),
         Probe(
             key="codex_tools",
-            backend="Codex (tool execution, read-only sandbox)",
+            backend="Codex (tool execution, danger-full-access)",
             role="optional",
             scaffold="codex",
             model=EXECUTOR_MODEL,
@@ -232,6 +250,7 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
             command=codex_tools,
             timeout_s=90,
             expect_stdout=TOOL_PROBE_TEXT,
+            attempts=2,
         ),
         Probe(
             key="verifier_dsh",

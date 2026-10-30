@@ -8,6 +8,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +21,7 @@ from agentgate.status import (
     write_marker,
     write_state,
 )
-from agentgate.validation import evaluate_model_pair
+from agentgate.validation import evaluate_model_pair, require_different_models
 from agentgate.verifier import VerificationOutcome, verify_round
 from agentgate.workspace import clean_agent_worktrees
 
@@ -692,8 +693,24 @@ def resume_task(
     if state.get("status") in TERMINAL_STATUSES and force:
         repo = Path(state["repo"])
         original_task_path = task.path
+        # Validate BEFORE destroying anything. Previously this deleted the run
+        # and its worktrees and only then called start_task, so a task that
+        # could not start (e.g. a self-pointing repo without --allow-self)
+        # lost its old run archive permanently.
+        fresh_task = load_task(original_task_path)
+        require_allowed_repo(fresh_task, allow_self=allow_self)
+        require_different_models(
+            fresh_task.executor.model,
+            fresh_task.verifier.model,
+            executor_scaffold=fresh_task.executor.harness,
+            verifier_scaffold=fresh_task.verifier.harness,
+        )
         clean_agent_worktrees(repo, task_id=task_id, force=True)
-        shutil.rmtree(run_dir)
+        # Prefer archiving over deleting: the old run stays recoverable.
+        trash = run_dir.parent / ".trash"
+        trash.mkdir(exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        shutil.move(str(run_dir), str(trash / f"{task_id}-{stamp}"))
         return start_task(
             original_task_path,
             max_rounds=int(state["effective_max_rounds"]),

@@ -446,3 +446,27 @@ def test_passed_run_requires_force_for_reverify(
             worktree,
             "ag/verifier-fixture-r1",
         )
+
+
+def test_verify_records_verdict_in_run_state(tmp_path: Path) -> None:
+    """`ag verify` used to leave state.json saying "executed" after a PASS."""
+
+    from agentgate.verifier import _record_round_in_state
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "status": "blocked",
+                "rounds": [{"round": 1, "status": "executed"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _record_round_in_state(run_dir, 1, {"verdict": "PASS", "defects": []})
+
+    state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+    assert state["rounds"][0]["status"] == "verified_pass"
+    assert state["rounds"][0]["verdict"]["verdict"] == "PASS"

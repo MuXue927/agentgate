@@ -5,6 +5,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -356,6 +357,43 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         stale.unlink()
 
 
+def _record_round_in_state(
+    run_dir: Path, round_no: int, verdict: dict[str, Any]
+) -> None:
+    """Write the verdict back into runs/<id>/state.json.
+
+    `ag run` does this itself while driving the rounds, but `ag verify` runs a
+    round on its own -- without this the run state kept saying `executed` while
+    verdict.json said PASS, and `report.md` regenerated from that state claimed
+    "executed but not yet verified".
+    """
+
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    status = {
+        "PASS": "verified_pass",
+        "FAIL": "verified_fail",
+        "BLOCKED": "blocked",
+    }.get(str(verdict.get("verdict")), "verified_fail")
+    for entry in state.get("rounds", []):
+        if entry.get("round") == round_no:
+            entry["status"] = status
+            entry["verdict"] = verdict
+            break
+    else:
+        return
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def verify_round(
     task_id: str,
     *,
@@ -488,6 +526,7 @@ def verify_round(
         json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    _record_round_in_state(run_dir, round_no, verdict)
     if verdict["verdict"] == "PASS":
         write_marker(run_dir, "DONE")
         set_status(run_dir, "done")
