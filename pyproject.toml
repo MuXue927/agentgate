@@ -25,5 +25,11 @@ dev = [
     "ruff>=0.8",
 ]
 
+[tool.ruff]
+# docs/ 里是设计方案、验收记录与 STEP 报告，其中的 python 代码块是示例或
+# 伪代码片段，不是要执行的代码。ruff format 会把 Markdown 代码块一并格式化，
+# 不排除的话 `ruff format --check` 永远红。
+extend-exclude = ["docs"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
