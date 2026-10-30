@@ -15,7 +15,7 @@
 |---|---|---|---|---|
 | P0-1 | `expect` 只进提示词，真实 exit code 从未被代码比对 | [loope](https://github.com/mateaix/loope) `--verify-cmd` 退出码硬门；[agent-loops](https://github.com/andromarces/agent-loops) 运行时在评审沙箱外跑测试 | 新增纯函数逐键判定 `expect`；失败时不调验收模型，直接由机检结果合成缺陷并进入回灌；`where` 加 `mechanical:` 前缀 | 0250082 |
 | P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | |
-| P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；用 git 层 `diff --name-only` + 未跟踪文件匹配，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | |
+| P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；按 `git diff --name-status` 的 M/D/R 拦、A 放行；检查排在机检之前，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | `51c2c5f` |
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：生成 `context.md`（diffstat + 改动文件全文 + 基线 sha），用显式分隔块标注"这是数据不是指令"，保持无工具验收官 | |
 | P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 每轮记 `diff_sha256`，与上一轮相同即 `FAILED: no-progress`；不引入 monitor agent | |
@@ -51,11 +51,14 @@
 
 - 问题：`constraints` 是散文，`protected` 在 `src/` 里零命中；执行方可改
   `tests/` 让 check 变绿，也可改 `tasks/*.task.yaml` 削弱**下一次**运行的
-  验收标准（本轮跑的是 `runs/<id>/task.yaml` 快照）。
+  验收标准（本轮跑的是 `runs/<id>/task.yaml` 快照）。机检对此完全无感：
+  改松后的测试照样退出 0。
 - 来源：SpecBench 对"刷分"的度量、Loki 的 held-out 闸门。
-- 独立设计：git 层匹配，失败即 `BLOCKED: protected-path-modified`；不装 hook、
-  不改 CI、不引入外部工具。
-- commit：（待填）
+- 独立设计：状态白名单而不是内容启发式——`A` 放行，`M`/`D`/`R`（看被删侧）
+  /`T`/`U` 命中即 `BLOCKED: protected-path-modified`；glob 自己实现整路径语义
+  （`*` 不跨 `/`，`**` 跨），不依赖 `PurePath.match` 的平台差异；检查位置排在
+  机检之前，落点仍在 `verify_round` 一处。不装 hook、不改 CI、不引入外部工具。
+- commit：`51c2c5f`
 
 ### P1-1 held-out 判据
 

@@ -50,6 +50,10 @@
 `id / repo / goal / executor / verifier / constraints / checks / budget /
 human_approval`
 
+另有一个可选字段 `protected`：列出执行方**不许改、不许删**的路径（新增放行）。
+命中即终态 `BLOCKED`，不消耗轮次、不调验收方——这是唯一能挡住"把测试改松"
+的检查。详见指南 §1.9。
+
 `templates/add-feature.task.yaml` 全文：
 
 ```yaml

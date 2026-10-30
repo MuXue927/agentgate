@@ -217,11 +217,17 @@ FAIL → 最终 FAIL（两侧都 PASS 才算 PASS）。这条防的是"机检通
 ### P0-3 受保护路径（fail closed）
 
 - 问题：见 §2.3。
-- 做法：`task.yaml` 增加可选 `protected: ["tests/**", ".github/**"]`（glob）。
-  collector 收集后拿 `git diff --name-only <base>` + 未跟踪文件去匹配；
+- 做法：`task.yaml` 增加可选 `protected: ["tests/**", "tasks/**", ".github/**"]`（整路径 glob）。
+  拿 `git diff --name-status <base>` 判定，**按状态而不是按内容**：
+  `A`（新增）放行，`M`（修改）/`D`（删除）/`R`（重命名，看被删的那一侧）
+  /`T`/`U` 命中即 **BLOCKED**。放行 `A` 不是宽容，是必需——自改任务本身就要新增
+  测试文件，若连新增都拦，P0-3 会把"让 AgentGate 自己变好"这件事挡死。
   命中 → 终态 `BLOCKED: protected-path-modified`，不消耗轮次、不调验收模型。
   未声明时 `report.md` 与 `--dry-run` 都打印一行 `PROTECTED: none declared`，
   不做静默默认。
+- **顺序：`collect → protected → 机检 → 验收方`。** 这一条比判定规则更要紧：
+  执行方把 `assert x == 3` 改成 `assert True` 后 `pytest` 仍退出 0，机检全绿，
+  验收官看到的是一片绿。防线必须放在机检之前，否则 P0-1 反而成了帮凶。
 - 接口变化：新增第 10 个字段（可选）。模板与 `taskfiles/` 逐个补。
 - 自改场景：目标仓库是 AgentGate 自己、或任务文件纳入版本管理时，默认保护集
   必须包含 `tasks/`。`runs/<id>/task.yaml` 快照只保护本轮，被削弱的是**下一次

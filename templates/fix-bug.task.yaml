@@ -8,6 +8,12 @@ verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
 constraints:
   - Keep the regression test in tests/.
   - Do not push or merge.
+# protected: 只拦"改/删/重命名既有文件"，新增文件一律放行（A）。
+# 命中即终态 BLOCKED，不调验收方。若这次修复必须改既有测试，把
+# "tests/**" 换成具体文件或删掉这一行——但别为了跑通就整条删掉。
+protected:
+  - "tests/**"
+  - "tasks/**"
 checks:
   - name: reproduce-regression
     run: uv run pytest -q -k "regression or reproduce"

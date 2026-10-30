@@ -8,6 +8,11 @@ verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free}
 constraints:
   - Change test files only unless a production fix is required for correctness.
   - Do not push or merge.
+# protected: 写测试的任务恰好最需要它——执行方"改松一条旧测试"也算让
+# pytest 变绿。新增测试文件（A）放行，改/删既有测试（M/D/R）BLOCKED。
+protected:
+  - "tests/**"
+  - "tasks/**"
 checks:
   - name: tests
     run: uv run pytest -q

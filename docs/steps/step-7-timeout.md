@@ -192,6 +192,13 @@ Double-blind tier: ★★
 - `codex.js` 的 node 直连入口（潜在去掉 `cmd.exe` 这一层）**跳过**，按提示词
   的"若牵动太多调用点就跳过"。树杀已经让超时按墙钟生效，去掉中间层是优化
   不是修复，且需要新的路径探测，属于脆弱改动。
-- 沙箱内的检查命令（`collector.run_checks`）现在也树杀，但它跑的是
-  `shell=True` 的字符串，`taskkill /T` 能否杀掉 cmd 之下的孙进程取决于
-  子进程是否仍挂在同一个父链上 —— 本步没有制造这种用例，未验证。
+- 沙箱内的检查命令（`collector.run_checks`）现在也树杀。维护者复核时补做了
+  这个用例，实测两条路径都按墙钟返回：
+
+  ```text
+  shell=True  单层子进程  → 2.3s exit=124 ✔
+  shell=False 直接子进程  → 2.3s exit=124 ✔
+  ```
+
+  结论：`taskkill /T` 能穿过 `cmd.exe` 打到子进程，`shell=True` 路径**已验证**。
+  （本步当初只测了 `shell=False`，所以写的是"未验证"；现按实测更正。）

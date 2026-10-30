@@ -110,9 +110,10 @@ uv run ag clean hello-first           # 清理 worktree 与分支
 
 ---
 
-## 1. 九个字段
+## 1. 九个必填字段 + 一个可选字段
 
 `id / repo / goal / executor / verifier / constraints / checks / budget / human_approval` 全部必填，没有静默默认值。
+`protected` 可选；不写就是不设保护，报告会打印 `PROTECTED: none declared`，不会静默。
 
 ### 1.1 `id`
 
@@ -213,6 +214,9 @@ constraints:
 3. 明确的目录白名单
 4. 不许动验收标准本身（否则 Agent 可以改 checks 蒙混）
 
+**散文约束不能替代 `protected`。** 上面四条写进 `constraints` 只是提示词；执行方
+改松测试、删掉任务文件，`constraints` 一个字都拦不住。要拦，见 §1.9。
+
 **坑**：constraints 与 checks 冲突时任务会死锁。真实案例——原先 constraints 写"只许改 docs/"，却又有 `readme-links-still-valid` 检查 README 链接有效；移动 STEP 文件必然让 README 链接断，于是 3 轮全 FAILED。**写完后逐条对照 constraints 与 checks，确认存在解。**
 
 ### 1.6 `checks` —— 核心
@@ -290,6 +294,37 @@ human_approval: {before_execute: false, before_merge: true}
 
 - `before_execute`: 开跑前是否要人确认（v0.2 未实装交互，保持 `false`）
 - `before_merge`: **必须 `true`**。`ag` 永不自动合并，只打印 merge 命令
+
+### 1.9 `protected`（可选）—— 受保护路径
+
+```yaml
+protected:
+  - "tests/**"
+  - "tasks/**"
+  - "schemas/**"
+```
+
+整路径 glob，`*` 不跨 `/`，`**` 跨。**命中即终态 `BLOCKED`，不消耗轮次、不调验收方。**
+
+判定看 git 状态，不是看内容：
+
+| 状态 | 含义 | 处置 |
+|---|---|---|
+| `A` | 新增文件 | **放行**（自改任务必须能加测试） |
+| `M` | 修改既有文件 | 命中 → **BLOCKED** |
+| `D` | 删除文件 | 命中 → **BLOCKED** |
+| `R` | 重命名 | 看**被删掉的那一侧**路径，命中 → **BLOCKED** |
+| `T` / `U` | 类型变化 / 未合并 | 命中 → **BLOCKED** |
+
+**为什么要它**：机检比对的是 `expect` 与真实输出。执行方把
+`assert x == 3` 改成 `assert True`，`pytest` 照样退出 0，机检全绿。
+只有"这个文件被改过"这件事，机检看不出来，`protected` 才能。
+
+**顺序**：`collect → protected → 机检 → 验收方`。受保护检查必须排在机检之前，
+否则"改松测试 → 机检全绿 → 验收官看到一片绿"就绕过去了。
+
+**别套太死**：`tests/**` 挡住的是"改/删既有测试"。如果任务本身就要改某条旧测试，
+要么别写这条 glob，要么把 glob 收窄到具体文件（如 `tests/test_contract.py`）。
 
 ---
 
