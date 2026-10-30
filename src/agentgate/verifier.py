@@ -291,7 +291,10 @@ def _run_attempt(
         sandbox=task.verifier.sandbox,
     )
     last_message = round_dir / f"verifier-attempt-{number}.last.txt"
-    command_list[-1:-1] = ["-o", str(last_message)]
+    # append, not insert-before-last: the prompt no longer sits at the end of
+    # argv (it goes over stdin), so inserting at -1 would land between
+    # "-m" and its model value.
+    command_list.extend(["-o", str(last_message)])
     command = tuple(command_list)
     started = time.monotonic()
     try:
