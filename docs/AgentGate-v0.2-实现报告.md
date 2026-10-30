@@ -59,16 +59,16 @@ source_test_schema_template_files=39
 # ag-sandbox-two-round  DONE  2.0min / 2 轮 / $0.0060 / 双盲 ★★
 
 ## 结论
-Verification passed; the final branch is ready for human review.
-verification passed
+R1 FAIL（number.txt：实际 2，期望 3）；R2 PASS。
+最终分支仅新增 number.txt（+1）。
+建议合并。
 
 ## 每轮
 - R1: FAIL（number-wrong）
 - R2: PASS
 
 ## 改了哪些文件
-number.txt | 1 +
- 1 file changed, 1 insertion(+)
+A	number.txt	+1 / -0
 
 ## 你需要做的
 git diff 0a56a0494c916c3b77b63d25c18a85bda73c75af..ag/ag-sandbox-two-round-r2
