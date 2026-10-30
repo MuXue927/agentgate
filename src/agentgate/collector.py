@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from agentgate.adapters.codex import RunResult
+from agentgate.proc import run_bounded
 from agentgate.spec import CheckSpec, TaskSpec
 from agentgate.status import write_marker
 from agentgate.validation import ModelPair
@@ -68,33 +69,18 @@ def run_checks(task: TaskSpec, worktree: Path) -> tuple[CheckOutput, ...]:
     for check in task.checks:
         started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = run_bounded(
                 check.run,
                 cwd=worktree,
+                timeout_s=timeout_s,
                 shell=True,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_s,
-                check=False,
             )
             outputs.append(
                 CheckOutput(
                     spec=check,
-                    exit_code=completed.returncode,
+                    exit_code=124 if completed.timed_out else completed.returncode,
                     stdout=completed.stdout,
                     stderr=completed.stderr,
-                    duration_s=time.monotonic() - started,
-                )
-            )
-        except subprocess.TimeoutExpired as exc:
-            outputs.append(
-                CheckOutput(
-                    spec=check,
-                    exit_code=124,
-                    stdout=_text(exc.stdout),
-                    stderr=_text(exc.stderr),
                     duration_s=time.monotonic() - started,
                 )
             )
@@ -109,14 +95,6 @@ def run_checks(task: TaskSpec, worktree: Path) -> tuple[CheckOutput, ...]:
                 )
             )
     return tuple(outputs)
-
-
-def _text(value: str | bytes | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
 
 
 def ensure_run_slot(

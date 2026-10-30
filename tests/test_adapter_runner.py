@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -14,6 +13,7 @@ from agentgate.adapters.codex import (
     classify_error,
     resolve_executable,
 )
+from agentgate.proc import BoundedResult
 from agentgate.spec import load_task
 from agentgate.validation import ModelPairError
 
@@ -66,13 +66,13 @@ def test_runner_passes_no_shell_and_records_duration(
     task = load_task(ROOT / "templates" / "add-feature.task.yaml")
     calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_run(
-        command: list[str], **kwargs: object
-    ) -> subprocess.CompletedProcess[str]:
+    def fake_run(command: list[str], **kwargs: object) -> BoundedResult:
         calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0, "ok\n", "")
+        return BoundedResult(command, 0, "ok\n", "")
 
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    # The runner goes through proc.run_bounded (tree-killing timeout), not
+    # subprocess.run.
+    monkeypatch.setattr(runner, "run_bounded", fake_run)
     result = runner.run(task, "do work", cwd=ROOT)
 
     assert result.exit_code == 0
@@ -81,7 +81,7 @@ def test_runner_passes_no_shell_and_records_duration(
     assert result.duration_s >= 0
     assert Path(calls[0][0][0]).stem.lower() == "codex"
     assert "shell" not in calls[0][1]
-    assert calls[0][1]["timeout"] == task.budget.max_minutes_per_round * 60
+    assert calls[0][1]["timeout_s"] == task.budget.max_minutes_per_round * 60
 
 
 def test_runner_rejects_same_family_before_subprocess(
@@ -95,7 +95,7 @@ def test_runner_rejects_same_family_before_subprocess(
         nonlocal called
         called = True
 
-    monkeypatch.setattr(runner.subprocess, "run", should_not_run)
+    monkeypatch.setattr(runner, "run_bounded", should_not_run)
     with pytest.raises(ModelPairError, match="同一模型族"):
         runner.run(task, "do work", cwd=ROOT)
 

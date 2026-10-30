@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import subprocess
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agentgate.proc import run_bounded
 from agentgate.validation import ModelPairError, evaluate_model_pair
 
 DSH_EXE = Path(r"D:\Software\DeepSeek Harness\DeepSeek Harness.exe")
@@ -112,32 +112,11 @@ def _run_probe_once(
     started: float,
 ) -> ProbeResult:
     try:
-        completed = subprocess.run(
+        completed = run_bounded(
             command,
             cwd=cwd,
+            timeout_s=probe.timeout_s,
             env=probe.env,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=probe.timeout_s,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        stdout = exc.stdout or ""
-        stderr = exc.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode("utf-8", errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode("utf-8", errors="replace")
-        return ProbeResult(
-            probe=probe,
-            ok=False,
-            exit_code=None,
-            duration_s=time.monotonic() - started,
-            stdout=stdout,
-            stderr=stderr,
-            error=f"timeout after {probe.timeout_s}s",
         )
     except OSError as exc:
         return ProbeResult(
@@ -146,6 +125,17 @@ def _run_probe_once(
             exit_code=None,
             duration_s=time.monotonic() - started,
             error=f"{type(exc).__name__}: {exc}",
+        )
+
+    if completed.timed_out:
+        return ProbeResult(
+            probe=probe,
+            ok=False,
+            exit_code=None,
+            duration_s=time.monotonic() - started,
+            stdout=completed.stdout,
+            stderr=completed.stderr,
+            error=f"timeout after {probe.timeout_s}s",
         )
 
     return ProbeResult(

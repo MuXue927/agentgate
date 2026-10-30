@@ -16,6 +16,7 @@ from agentgate.expectations import (
     build_mechanical_verdict,
     evaluate_checks,
 )
+from agentgate.proc import run_bounded
 from agentgate.spec import (
     PROJECT_ROOT,
     TaskSpec,
@@ -69,16 +70,11 @@ def _run_command(
     timeout_s: float,
     stdin_text: str,
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    return run_bounded(
         resolve_executable(command),
         cwd=cwd,
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_s,
-        check=False,
+        stdin_text=stdin_text,
+        timeout_s=timeout_s,
     )
 
 
@@ -328,6 +324,18 @@ def _run_attempt(
             stdout=stdout,
             raw_stdout=stdout,
             stderr=stderr or "verifier timed out",
+            duration_s=time.monotonic() - started,
+        )
+    if getattr(completed, "timed_out", False):
+        # run_bounded kills the tree and reports 124 instead of raising, so a
+        # real deadline still lands in the same place as the fake-timeout path.
+        return AttemptResult(
+            number=number,
+            command=command,
+            exit_code=completed.returncode,
+            stdout=completed.stdout,
+            raw_stdout=completed.stdout,
+            stderr=completed.stderr or "verifier timed out",
             duration_s=time.monotonic() - started,
         )
     raw_stdout = completed.stdout
