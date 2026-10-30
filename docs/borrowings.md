@@ -6,6 +6,9 @@
 
 `commit` 列留空表示尚未落地。
 
+`P0-4`（超时树杀）不在本表：它不是借鉴项，是本仓库在 Windows 上自己的缺陷，
+没有外部来源。记录见文末「非借鉴项」。
+
 ## 总表
 
 | 编号 | 问题 | 来源（链接 + 一句话） | 我们的独立设计差异 | commit |
@@ -90,3 +93,17 @@
 - 独立设计：只存在于 `tests/`，通过 adapter 参数注入，无 CLI 开关，
   明确不是运行时降级路径。
 - commit：（待填）
+
+## 非借鉴项（无外部来源，只为留档）
+
+### P0-4 超时树杀
+
+- 问题：Windows 上 `codex` 是 `.cmd` shim，直接子进程是 `cmd.exe`，真正的
+  worker 是孙进程。`subprocess.run(timeout=)` 只杀直接子进程，孙进程仍持有
+  stdout/stderr 管道，内部第二次 `communicate()` 等到管道 EOF 才返回。实测
+  `timeout=2` 用了 12.6 秒。四处调用点全部受影响，而 `max_total_minutes`
+  只在阶段之间检查，所以阶段内部挂住 = `ag run` 永久挂起。
+- 来源：无。本仓库实测发现（维护者复现并指出影响面）。
+- 独立设计：`src/agentgate/proc.py` 的 `run_bounded()`，子进程独立进程组 +
+  超时后 `taskkill /T` / `killpg` + 有界收尾（`kill_grace_s`）。
+- commit：`69337dc`（说明见 `docs/steps/step-7-timeout.md`）。

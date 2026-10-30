@@ -52,6 +52,8 @@ uv run ag report <task-id>
 - [STEP 3：Codex 执行方与工件收集](steps/step-3-executor.md)
 - [STEP 4：只读验收方与单轮裁决](steps/step-4-verifier.md)
 - [STEP 5：轮次循环与无人值守硬化](steps/step-5-loop.md)
+- [STEP 6：机检硬门槛（P0-1）](steps/step-6-expect-gate.md)
+- [STEP 7：超时树杀（P0-4）](steps/step-7-timeout.md)
 
 所有相对链接均以 `docs/` 为基准。STEP 文件由根目录迁入 `docs/steps/`，
 正文内容保持不变；`docs/design.md` 仍是规范设计参考，不因整理文档而删改
