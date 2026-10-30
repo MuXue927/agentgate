@@ -57,6 +57,7 @@ def run(
         completed = subprocess.run(
             command,
             cwd=cwd,
+            input=prompt,
             env=dict(env) if env is not None else None,
             capture_output=True,
             text=True,

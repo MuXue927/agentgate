@@ -55,7 +55,9 @@ def test_codex_command_uses_argument_list_and_readonly_flag(tmp_path: Path) -> N
     assert command[:4] == ["codex", "exec", "--skip-git-repo-check", "-C"]
     assert command[4] == str(tmp_path)
     assert command[5:7] == ["-s", "read-only"]
-    assert command[-1] == "review this"
+    # The prompt travels on stdin: an 18KB verifier input blows the Windows
+    # argv limit ("input line is too long").
+    assert "review this" not in command
 
 
 def test_runner_passes_no_shell_and_records_duration(

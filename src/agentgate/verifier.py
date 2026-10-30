@@ -51,7 +51,7 @@ class VerificationOutcome:
 
 
 CommandRunner = Callable[
-    [tuple[str, ...], Path, float],
+    [tuple[str, ...], Path, float, str],
     subprocess.CompletedProcess[str],
 ]
 
@@ -60,10 +60,12 @@ def _run_command(
     command: tuple[str, ...],
     cwd: Path,
     timeout_s: float,
+    stdin_text: str,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         resolve_executable(command),
         cwd=cwd,
+        input=stdin_text,
         capture_output=True,
         text=True,
         encoding="utf-8",
@@ -297,6 +299,7 @@ def _run_attempt(
             command,
             worktree,
             task.budget.max_minutes_per_round * 60,
+            prompt,
         )
     except subprocess.TimeoutExpired as exc:
         stdout = _text(exc.stdout)

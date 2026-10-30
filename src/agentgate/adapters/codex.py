@@ -118,7 +118,12 @@ class CodexAdapter:
             command.extend(("-s", "read-only"))
         if schema is not None:
             command.extend(("--output-schema", str(schema)))
-        command.extend(("-m", model, prompt))
+        # The prompt is NOT placed on the command line: the verifier input
+        # embeds a full diff and exceeds the Windows argv limit (8k through
+        # cmd.exe), failing with "input line is too long". `codex exec` reads
+        # the instructions from stdin when no PROMPT argument is given, so
+        # callers must pass it as stdin.
+        command.extend(("-m", model))
         return command
 
     def parse(

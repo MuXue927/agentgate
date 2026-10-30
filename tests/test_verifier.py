@@ -202,7 +202,7 @@ def test_pass_writes_verdict_and_done(
         outcome = verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=lambda command, cwd, timeout: completed(
+            command_runner=lambda command, cwd, timeout, stdin_text: completed(
                 f"extra text\n```json\n{pass_json()}\n```"
             ),
         )
@@ -233,7 +233,9 @@ def test_fail_is_normal_result_and_keeps_run(
         outcome = verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=lambda command, cwd, timeout: completed(fail_json()),
+            command_runner=lambda command, cwd, timeout, stdin_text: completed(
+                fail_json()
+            ),
         )
 
         assert outcome.verdict["verdict"] == "FAIL"
@@ -254,7 +256,7 @@ def test_two_invalid_outputs_block_without_verdict(
     runs_root, worktree = prepare_run(tmp_path)
     calls = 0
 
-    def invalid(command: tuple[str, ...], cwd: Path, timeout: float):
+    def invalid(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         nonlocal calls
         calls += 1
         return completed("not valid JSON")
@@ -286,8 +288,8 @@ def test_one_invalid_then_valid_retries_once(
     prompts: list[str] = []
     outcomes = iter(("bad JSON", pass_json()))
 
-    def retry(command: tuple[str, ...], cwd: Path, timeout: float):
-        prompts.append(command[-1])
+    def retry(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        prompts.append(stdin_text)
         return completed(next(outcomes))
 
     try:
@@ -313,7 +315,7 @@ def test_verifier_modification_invalidates_result(
 ) -> None:
     runs_root, worktree = prepare_run(tmp_path)
 
-    def modify(command: tuple[str, ...], cwd: Path, timeout: float):
+    def modify(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         (cwd / "verifier-dirty.txt").write_text("dirty\n", encoding="utf-8")
         return completed(pass_json())
 
@@ -342,8 +344,8 @@ def test_verifier_command_is_readonly(
     runs_root, worktree = prepare_run(tmp_path)
     commands: list[tuple[str, ...]] = []
 
-    def capture(command: tuple[str, ...], cwd: Path, timeout: float):
-        commands.append(command)
+    def capture(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        commands.append((command, stdin_text))
         return completed(pass_json())
 
     try:
@@ -353,11 +355,12 @@ def test_verifier_command_is_readonly(
             command_runner=capture,
         )
 
-        assert commands[0][-1].startswith("You are a read-only verifier")
-        assert "-s" in commands[0]
-        assert commands[0][commands[0].index("-s") + 1] == "read-only"
-        schema_flag = commands[0].index("--output-schema")
-        assert commands[0][schema_flag + 1].endswith("verdict.schema.json")
+        command, stdin_text = commands[0]
+        assert stdin_text.startswith("You are a read-only verifier")
+        assert "-s" in command
+        assert command[command.index("-s") + 1] == "read-only"
+        schema_flag = command.index("--output-schema")
+        assert command[schema_flag + 1].endswith("verdict.schema.json")
     finally:
         cleanup_worktree(
             tmp_path / "target",
@@ -371,7 +374,9 @@ def test_output_last_message_file_is_authoritative(
 ) -> None:
     runs_root, worktree = prepare_run(tmp_path)
 
-    def write_last_message(command: tuple[str, ...], cwd: Path, timeout: float):
+    def write_last_message(
+        command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str
+    ):
         flag = command.index("-o")
         Path(command[flag + 1]).write_text(pass_json(), encoding="utf-8")
         return subprocess.CompletedProcess(
@@ -406,7 +411,7 @@ def test_passed_run_requires_force_for_reverify(
     runs_root, worktree = prepare_run(tmp_path)
     calls = 0
 
-    def passing(command: tuple[str, ...], cwd: Path, timeout: float):
+    def passing(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         nonlocal calls
         calls += 1
         return completed(pass_json())
