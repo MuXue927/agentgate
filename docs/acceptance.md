@@ -90,3 +90,41 @@ v0.2 不实现自动降级、通知、成本治理或 GUI 工具适配。
 
 本验收记录本身只整理现有证据，不重新执行模型调用。`DONE` 仍不等于自动合并：
 合并前必须由人查看报告与 diff，并显式执行 merge 命令。
+
+## P0-1 落地后的补充验收（2026-10-30）
+
+v0.2 验收时，`checks[].expect` 只被序列化进提示词，由验收模型自行判断；
+`verdict` 与 `checks[].status` 都是模型填的，schema 只能保证"自洽"，不能保证
+"自洽即真实"。P0-1 把判定移到代码侧（`src/agentgate/expectations.py`）：
+任一 check 真实输出不满足 `expect` 时，验收模型不被调用，判决由机检合成，
+`where` 带 `mechanical:` 前缀。
+
+### 判据与证据
+
+| 判据 | 证据 |
+|---|---|
+| 机检失败时不调用验收模型 | `tests/test_expectations.py::test_mechanical_fail_overrides_model_pass`（`calls == []`） |
+| 机检失败优先于模型 PASS | 同上，最终 `verdict == FAIL` |
+| 机检全绿仍须模型 PASS | `test_all_checks_pass_still_requires_model_pass` |
+| 超时（124）是机检 FAIL，不是 BLOCKED | `test_command_timeout_is_mechanical_fail`（无 `BLOCKED` 标记） |
+| 合成缺陷可与模型缺陷区分 | `test_mechanical_verdict_is_distinguishable`（`where == "mechanical:hello-content"`） |
+| 四类 `expect` 逐键判定、不短路 | `test_every_declared_key_is_evaluated`（4 组参数） |
+
+命令与真实输出：
+
+```text
+$ uv run pytest -q
+94 passed, 2 subtests passed in 37.73s
+
+$ uv run ruff check
+All checks passed!
+```
+
+（P0-1 之前为 86 passed；新增 8 个用例。）
+
+### 与 v0.2 验收的关系
+
+本补丁不改变"执行与验收必须异族模型""验收方只读""不 push 不自动合并"
+三条铁律，也不改 `task.yaml` 与 `verdict` 的 schema。它只把一条原本由模型
+代劳的判断收回给代码。逐条借鉴来源见
+[borrowings.md](borrowings.md) P0-1。

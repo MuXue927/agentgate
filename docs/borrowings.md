@@ -10,7 +10,7 @@
 
 | 编号 | 问题 | 来源（链接 + 一句话） | 我们的独立设计差异 | commit |
 |---|---|---|---|---|
-| P0-1 | `expect` 只进提示词，真实 exit code 从未被代码比对 | [loope](https://github.com/mateaix/loope) `--verify-cmd` 退出码硬门；[agent-loops](https://github.com/andromarces/agent-loops) 运行时在评审沙箱外跑测试 | 新增纯函数逐键判定 `expect`；失败时不调验收模型，直接由机检结果合成缺陷并进入回灌；`where` 加 `mechanical:` 前缀 | |
+| P0-1 | `expect` 只进提示词，真实 exit code 从未被代码比对 | [loope](https://github.com/mateaix/loope) `--verify-cmd` 退出码硬门；[agent-loops](https://github.com/andromarces/agent-loops) 运行时在评审沙箱外跑测试 | 新增纯函数逐键判定 `expect`；失败时不调验收模型，直接由机检结果合成缺陷并进入回灌；`where` 加 `mechanical:` 前缀 | 0250082 |
 | P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | |
 | P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；用 git 层 `diff --name-only` + 未跟踪文件匹配，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | |
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
@@ -33,7 +33,7 @@
   短路掉模型调用，省一次付费调用，也省掉"模型替机检背书"这一步。
 - 与来源的差异：对方是"先跑命令再让模型看结果"，我们是"先由代码判命令，
   代码判不过就不请模型"。
-- commit：（待填）
+- commit：`0250082`
 
 ### P0-2 subject 绑定
 
