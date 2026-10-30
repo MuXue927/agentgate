@@ -18,7 +18,7 @@ from agentgate.orchestrator import (
     resume_task,
     start_task,
 )
-from agentgate.spec import load_task
+from agentgate.spec import SpecError, load_task
 from agentgate.status import MARKERS
 from agentgate.validation import evaluate_model_pair
 from agentgate.verifier import VerificationOutcome
@@ -570,3 +570,41 @@ def test_ocx_usage_uses_resolved_executable() -> None:
 
     assert usage == Usage(total_tokens=123, cost_usd=0.5)
     assert run.call_args.args[0][0] == r"C:\bin\ocx.cmd"
+
+
+def test_allow_self_reaches_executor_for_self_repo(tmp_path: Path) -> None:
+    """Regression: `ag run --allow-self` must reach the executor.
+
+    _drive() used to hardcode allow_self=False when calling the executor, so a
+    task whose repo is AgentGate itself passed the initial check in start_task
+    and then raised SpecError from inside the round loop -- BLOCKED with 0
+    rounds even though the CLI flag was set.
+    """
+    project_root = Path(__file__).resolve().parents[1]
+    task = make_task(tmp_path, project_root)
+    seen: list[bool] = []
+
+    def executor(_path: Path, **kwargs: object) -> object:
+        seen.append(bool(kwargs["allow_self"]))
+        raise RuntimeError("sentinel-stop")
+
+    outcome = start_task(
+        task,
+        runs_root=tmp_path / "runs",
+        executor=executor,  # type: ignore[arg-type]
+        verifier=lambda *_args, **_kwargs: None,  # type: ignore[arg-type]
+        usage_provider=usage,
+        allow_self=True,
+    )
+
+    assert seen == [True]
+    assert outcome.state["status"] == "blocked"
+    assert "sentinel-stop" in json.dumps(outcome.state, ensure_ascii=False)
+
+
+def test_self_repo_without_allow_self_is_rejected(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    task = make_task(tmp_path, project_root)
+
+    with pytest.raises(SpecError, match="points to AgentGate itself"):
+        start_task(task, runs_root=tmp_path / "runs", usage_provider=usage)

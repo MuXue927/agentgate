@@ -319,6 +319,7 @@ def _drive(
     usage_provider: UsageProvider,
     clock: Callable[[], float],
     on_event: EventSink | None,
+    allow_self: bool = False,
 ) -> RunOutcome:
     events: list[str] = []
 
@@ -398,7 +399,7 @@ def _drive(
             try:
                 execution = executor(
                     run_dir / "task.yaml",
-                    allow_self=False,
+                    allow_self=allow_self,
                     runs_root=run_dir.parent,
                     round_no=round_no,
                     base_ref=base_ref,
@@ -660,6 +661,7 @@ def start_task(
         executor=executor,
         verifier=verifier,
         usage_provider=usage_provider,
+        allow_self=allow_self,
         clock=clock,
         on_event=on_event,
     )
@@ -669,6 +671,7 @@ def resume_task(
     task_id: str,
     *,
     force: bool = False,
+    allow_self: bool = False,
     runs_root: Path | None = None,
     executor: ExecutorCallable = execute_round,
     verifier: VerifierCallable = verify_round,
@@ -694,6 +697,7 @@ def resume_task(
         return start_task(
             original_task_path,
             max_rounds=int(state["effective_max_rounds"]),
+            allow_self=allow_self,
             runs_root=root,
             executor=executor,
             verifier=verifier,
@@ -710,4 +714,5 @@ def resume_task(
         usage_provider=usage_provider,
         clock=clock,
         on_event=on_event,
+        allow_self=allow_self,
     )

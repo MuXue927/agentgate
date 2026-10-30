@@ -232,11 +232,18 @@ def resume(
             help="Discard a terminal run and start it again.",
         ),
     ] = False,
+    allow_self: Annotated[
+        bool,
+        typer.Option(
+            "--allow-self",
+            help="Permit a task whose repo is AgentGate itself.",
+        ),
+    ] = False,
 ) -> None:
     """Resume from the next unfinished round."""
 
     try:
-        outcome = resume_task(task_id, force=force)
+        outcome = resume_task(task_id, force=force, allow_self=allow_self)
     except (
         OrchestratorError,
         SpecError,
