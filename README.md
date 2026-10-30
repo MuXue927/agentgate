@@ -1,8 +1,13 @@
 # AgentGate
 
+[![ci](https://github.com/MuXue927/agentgate/actions/workflows/ci.yml/badge.svg)](https://github.com/MuXue927/agentgate/actions/workflows/ci.yml)
+
 `ag` 是一个单一用途的无人值守执行/验收 CLI：Codex 执行、另一个模型在
 `-s read-only` 沙箱里只读验收；不过就把 defect 回灌给 Codex，最多跑到
 `max_rounds`，最后留下状态标记、一页纸报告和待合并分支。
+
+> 第一次使用请先读 [如何写 task.yaml](docs/task-yaml-guide.md)——九个字段、
+> `checks` 的写法准则、五类模板与反模式都在里面。
 
 ## 命令速查
 
