@@ -52,3 +52,25 @@ def test_fail_without_defects_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(SpecError, match=r"defects.*non-empty"):
         load_verdict(fixture)
+
+
+def test_task_yaml_parses_explicit_sandbox() -> None:
+    """Windows Codex sandbox is broken; tasks pin danger-full-access explicitly."""
+
+    root = Path(__file__).resolve().parents[1]
+    task = load_task(root / "tasks" / "agentgate-docs.task.yaml")
+
+    assert task.executor.sandbox == "danger-full-access"
+    assert task.verifier.sandbox == "danger-full-access"
+
+
+def test_sandbox_defaults_to_none(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "templates" / "fix-bug.task.yaml").read_text(encoding="utf-8")
+    task_path = tmp_path / "no-sandbox.task.yaml"
+    task_path.write_text(source, encoding="utf-8")
+
+    task = load_task(task_path)
+
+    assert task.executor.sandbox is None
+    assert task.verifier.sandbox is None

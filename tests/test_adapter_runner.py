@@ -128,3 +128,32 @@ def test_resolve_executable_passthrough_for_absolute_and_unknown() -> None:
     assert resolve_executable(["definitely-not-a-real-binary-xyz", "y"])[0] == (
         "definitely-not-a-real-binary-xyz"
     )
+
+
+def test_build_cmd_uses_explicit_sandbox() -> None:
+    command = CodexAdapter().build_cmd(
+        "prompt",
+        "m",
+        cwd=ROOT,
+        readonly=True,
+        schema=None,
+        sandbox="danger-full-access",
+    )
+
+    assert command[command.index("-s") + 1] == "danger-full-access"
+
+
+def test_build_cmd_defaults_to_read_only_for_verifier() -> None:
+    command = CodexAdapter().build_cmd(
+        "prompt", "m", cwd=ROOT, readonly=True, schema=None
+    )
+
+    assert command[command.index("-s") + 1] == "read-only"
+
+
+def test_build_cmd_executor_default_has_no_sandbox_flag() -> None:
+    command = CodexAdapter().build_cmd(
+        "prompt", "m", cwd=ROOT, readonly=False, schema=None
+    )
+
+    assert "-s" not in command

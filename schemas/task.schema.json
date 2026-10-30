@@ -40,6 +40,9 @@
         "model": {
           "type": "string",
           "minLength": 1
+        },
+        "sandbox": {
+          "enum": ["read-only", "workspace-write", "danger-full-access"]
         }
       }
     },
@@ -54,6 +57,9 @@
         "model": {
           "type": "string",
           "minLength": 1
+        },
+        "sandbox": {
+          "enum": ["read-only", "workspace-write", "danger-full-access"]
         }
       }
     },

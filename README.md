@@ -88,6 +88,23 @@ human_approval: {before_execute: false, before_merge: true}
 
 ## 常见坑
 
+- **Windows 上 Codex 的沙箱是坏的（当前最重要的坑）**：在 `-s read-only` 和
+  `-s workspace-write` 下，模型发起的**任何** shell 命令都会被拒绝，报
+  `Failed to create unified exec process: helper_unknown_error` 或
+  `rejected: blocked by policy`。执行方因此读不到仓库、改不了文件，
+  最终表现为 `BLOCKED: no changes detected`。
+  实测 Codex CLI 0.162.1 与 0.164.0 均可复现（上游 issue #43633 / #43881 / #54746）。
+  **对策**：在 `task.yaml` 里显式给两端设置 `sandbox: danger-full-access`：
+  ```yaml
+  executor: {harness: codex, model: deepseek-v4-flash, sandbox: danger-full-access}
+  verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free, sandbox: danger-full-access}
+  ```
+  **代价**：`danger-full-access` 不再由沙箱强制只读，验收方的"只读"退化为
+  「提示词约束 + 验收前后 `git status --porcelain` 复核」。复核只能看 worktree
+  内部，管不到 worktree 之外——这种环境下跑任务请务必先提交工作树，
+  事后用 `git status` 核对。
+  `ag doctor` 的 `Codex (tool execution, read-only sandbox)` 一行专门探这个：
+  它 FAIL 就说明必须加 `sandbox: danger-full-access`。
 - **沙箱无网络**：执行代理不能自己 `uv add` / `uv sync`。需要新依赖时，
   在报告里写清楚并由人代跑。
 - **worktree 必须在项目内部**：固定在目标仓库的 `wt/<task>-r<N>`。
@@ -99,6 +116,8 @@ human_approval: {before_execute: false, before_merge: true}
 - **同一缺陷连续两轮**：按归一后的 `(where, why)` 指纹识别，提前
   `FAILED`，避免空转。
 - **中断恢复**：末轮已执行但未验收时，`ag resume` 只补验收，不重做该轮。
+- **`resume --force` 会先删旧档案**：它在验证新 run 能否启动之前就 `rmtree`
+  了旧 run 目录，失败时旧记录不可恢复（已知缺陷，待修）。
 
 ## 最小上手
 

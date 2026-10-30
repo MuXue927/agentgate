@@ -30,6 +30,11 @@ def require_allowed_repo(task: TaskSpec, *, allow_self: bool) -> None:
 class ModelSpec:
     harness: str
     model: str
+    # Codex sandbox mode. None keeps the historical default
+    # (executor: config default workspace-write, verifier: read-only).
+    # Set explicitly to "danger-full-access" to work around the Codex Windows
+    # sandbox defect documented in README "常见坑".
+    sandbox: str | None = None
 
 
 @dataclass(frozen=True)
@@ -178,10 +183,12 @@ def load_task(path: Path) -> TaskSpec:
         executor=ModelSpec(
             harness=document["executor"]["harness"],
             model=document["executor"]["model"].strip(),
+            sandbox=document["executor"].get("sandbox"),
         ),
         verifier=ModelSpec(
             harness=document["verifier"]["harness"],
             model=document["verifier"]["model"].strip(),
+            sandbox=document["verifier"].get("sandbox"),
         ),
         constraints=tuple(document["constraints"]),
         checks=tuple(checks),

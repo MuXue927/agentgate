@@ -19,6 +19,16 @@ EXECUTOR_MODEL = "deepseek-v4-flash"
 CODEX_VERIFIER_MODEL = "nvidia/nemotron-3.5-lightning:free"
 PI_VERIFIER_MODEL = "bigmodel/glm-4.7-flash"
 PROBE_PROMPT = "reply OK"
+# A prompt that can only be satisfied by actually running a shell command.
+# "reply OK" passes even when the Codex sandbox cannot start a process at all,
+# which is exactly the Windows defect we need to surface here.
+TOOL_PROBE_TEXT = "agentgate-probe"
+TOOL_PROBE_PROMPT = f"Run this shell command and then reply with its exact output: echo {TOOL_PROBE_TEXT}"
+TOOL_PROBE_NOTE = (
+    "Codex 在此沙箱模式下无法执行任何 shell 命令（已知 Windows 缺陷，"
+    "见 README「常见坑」）。请在 task.yaml 里给 executor/verifier 显式设置 "
+    "`sandbox: danger-full-access`，或参考 §5.3 的三个上游 issue 等待修复。"
+)
 DSH_CREDENTIAL_NOTE = (
     "DSH 验收方不可用：需设置 DEEPSEEK_API_KEY 环境变量"
     "（DSH GUI 里的 key 在 headless 下读不到）"
@@ -39,6 +49,10 @@ class Probe:
     command: tuple[str, ...]
     timeout_s: int
     env: dict[str, str] | None = None
+    # When set, the probe only counts as OK if this text appears in stdout.
+    # Needed for tool-execution probes: a model blocked by the sandbox still
+    # exits 0 after explaining that it could not run anything.
+    expect_stdout: str = ""
 
 
 @dataclass(frozen=True)
@@ -118,7 +132,8 @@ def run_probe(probe: Probe, cwd: Path) -> ProbeResult:
 
     return ProbeResult(
         probe=probe,
-        ok=completed.returncode == 0,
+        ok=completed.returncode == 0
+        and (not probe.expect_stdout or probe.expect_stdout in completed.stdout),
         exit_code=completed.returncode,
         duration_s=time.monotonic() - started,
         stdout=completed.stdout,
@@ -158,6 +173,18 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
         CODEX_VERIFIER_MODEL,
         PROBE_PROMPT,
     )
+    codex_tools = (
+        "codex",
+        "exec",
+        "--skip-git-repo-check",
+        "-C",
+        project,
+        "-s",
+        "read-only",
+        "-m",
+        EXECUTOR_MODEL,
+        TOOL_PROBE_PROMPT,
+    )
     pi_verifier = (
         "pi",
         "-p",
@@ -194,6 +221,17 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
             required=True,
             command=codex_verifier,
             timeout_s=45,
+        ),
+        Probe(
+            key="codex_tools",
+            backend="Codex (tool execution, read-only sandbox)",
+            role="optional",
+            scaffold="codex",
+            model=EXECUTOR_MODEL,
+            required=False,
+            command=codex_tools,
+            timeout_s=90,
+            expect_stdout=TOOL_PROBE_TEXT,
         ),
         Probe(
             key="verifier_dsh",
@@ -247,6 +285,10 @@ def _required_repair_notes(
 
 def _optional_failure_summary(result: ProbeResult) -> str:
     raw = f"{result.stdout}\n{result.stderr}"
+    if result.probe.key == "codex_tools":
+        if "helper_unknown_error" in raw or "blocked by policy" in raw:
+            return TOOL_PROBE_NOTE
+        return "Codex 未能执行 shell 命令；真实运行会因 0 改动而 BLOCKED。"
     if result.probe.key == "verifier_dsh" and "MISSING_CREDENTIAL" in raw:
         return "需 DEEPSEEK_API_KEY"
     if result.probe.key == "verifier_pi":

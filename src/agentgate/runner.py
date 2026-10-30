@@ -48,6 +48,7 @@ def run(
             cwd=cwd,
             readonly=False,
             schema=None,
+            sandbox=task.executor.sandbox,
         )
     )
     timeout_s = task.budget.max_minutes_per_round * 60

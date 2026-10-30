@@ -40,6 +40,7 @@ class DoctorTests(unittest.TestCase):
             (
                 {
                     "executor_codex": True,
+                    "codex_tools": True,
                     "verifier_dsh": False,
                     "verifier_codex": True,
                     "verifier_pi": True,
@@ -49,6 +50,7 @@ class DoctorTests(unittest.TestCase):
             (
                 {
                     "executor_codex": True,
+                    "codex_tools": True,
                     "verifier_dsh": False,
                     "verifier_codex": True,
                     "verifier_pi": False,
@@ -70,6 +72,7 @@ class DoctorTests(unittest.TestCase):
     def test_required_failure_marks_tier_unavailable(self) -> None:
         statuses = {
             "executor_codex": False,
+            "codex_tools": True,
             "verifier_dsh": True,
             "verifier_codex": True,
             "verifier_pi": False,
@@ -84,6 +87,7 @@ class DoctorTests(unittest.TestCase):
     def test_render_preserves_raw_failure_and_repair_command(self) -> None:
         statuses = {
             "executor_codex": False,
+            "codex_tools": True,
             "verifier_dsh": False,
             "verifier_codex": False,
             "verifier_pi": False,
@@ -100,6 +104,7 @@ class DoctorTests(unittest.TestCase):
     def test_dsh_is_optional_and_reports_missing_credential(self) -> None:
         statuses = {
             "executor_codex": True,
+            "codex_tools": True,
             "verifier_dsh": False,
             "verifier_codex": True,
             "verifier_pi": False,

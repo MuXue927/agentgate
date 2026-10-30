@@ -73,6 +73,7 @@ class Adapter(Protocol):
         cwd: Path,
         readonly: bool,
         schema: Path | None,
+        sandbox: str | None = None,
     ) -> list[str]: ...
 
     def parse(
@@ -102,6 +103,7 @@ class CodexAdapter:
         cwd: Path,
         readonly: bool,
         schema: Path | None,
+        sandbox: str | None = None,
     ) -> list[str]:
         command = [
             "codex",
@@ -110,7 +112,9 @@ class CodexAdapter:
             "-C",
             str(cwd),
         ]
-        if readonly:
+        if sandbox:
+            command.extend(("-s", sandbox))
+        elif readonly:
             command.extend(("-s", "read-only"))
         if schema is not None:
             command.extend(("--output-schema", str(schema)))

@@ -286,6 +286,7 @@ def _run_attempt(
         cwd=worktree,
         readonly=True,
         schema=PROJECT_ROOT / "schemas" / "verdict.schema.json",
+        sandbox=task.verifier.sandbox,
     )
     last_message = round_dir / f"verifier-attempt-{number}.last.txt"
     command_list[-1:-1] = ["-o", str(last_message)]
