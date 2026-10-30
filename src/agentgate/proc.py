@@ -68,11 +68,15 @@ def run_bounded(
     if env is not None:
         kwargs["env"] = dict(env)
     if os.name == "nt":
-        # Own process group: taskkill /T walks the parent chain, the group
-        # flag additionally detaches us from console Ctrl-C handling.
+        # Windows does NOT get tree-killing from the process group:
+        # CREATE_NEW_PROCESS_GROUP only detaches us from console Ctrl-C. The
+        # actual kill is `taskkill /F /T`, which walks the parent chain (see
+        # `_kill_tree`). Do not "optimise" this away expecting group semantics
+        # -- there are none for TerminateProcess.
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
-        # Session leader -> killpg reaches every descendant.
+        # POSIX: the group is the mechanism -- session leader, so killpg
+        # reaches every descendant of the direct child.
         kwargs["start_new_session"] = True
 
     process = subprocess.Popen(command, **kwargs)

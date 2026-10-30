@@ -515,6 +515,9 @@ def _drive(
             manage_fail_status=False,
         )
         state["elapsed_seconds"] += _stage_elapsed(clock, stage_started)
+        if verification.protected is not None:
+            current_round["protected"] = verification.protected.as_document()
+            push(f"Round {round_no}: {verification.protected.summary_line()}")
         if verification.mechanical is not None:
             current_round["mechanical"] = verification.mechanical.as_document()
             if not verification.mechanical.ok:
@@ -538,6 +541,10 @@ def _drive(
 
         if verification.verdict is None:
             reason = verification.blocked_reason or "verification returned BLOCKED"
+            # The round did not end in "executed, waiting for verification" --
+            # it ended blocked, and the report should say so.
+            current_round["status"] = "blocked"
+            current_round["blocked_reason"] = reason
             state = _finish(
                 task,
                 run_dir,

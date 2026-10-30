@@ -16,6 +16,7 @@ from agentgate.orchestrator import (
     resume_task,
     start_task,
 )
+from agentgate.protected import ProtectedResult
 from agentgate.report import write_report
 from agentgate.spec import PROJECT_ROOT, SpecError, load_task
 from agentgate.status import read_state
@@ -190,10 +191,16 @@ def verify(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     if outcome.verdict is None:
+        protected = getattr(outcome, "protected", None)
+        if protected is not None:
+            typer.echo(protected.summary_line(), err=True)
         typer.echo(f"BLOCKED: {outcome.blocked_reason}", err=True)
         raise typer.Exit(code=2)
 
     verdict = outcome.verdict
+    protected = getattr(outcome, "protected", None)
+    if protected is not None:
+        typer.echo(protected.summary_line())
     mechanical = getattr(outcome, "mechanical", None)
     if mechanical is not None:
         if mechanical.ok:
@@ -226,6 +233,10 @@ def _print_outcome(outcome: RunOutcome) -> None:
     last = rounds[-1] if rounds else {}
     mechanical = last.get("mechanical") if isinstance(last, dict) else None
     verdict = last.get("verdict") if isinstance(last, dict) else None
+    protected_doc = last.get("protected") if isinstance(last, dict) else None
+    protected = ProtectedResult.from_document(protected_doc)
+    if protected is not None:
+        typer.echo(protected.summary_line())
     mechanical_failed = isinstance(mechanical, dict) and bool(mechanical.get("failed"))
     if isinstance(mechanical, dict):
         if mechanical_failed:

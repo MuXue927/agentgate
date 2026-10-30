@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agentgate.adapters.codex import RunResult
 from agentgate.proc import run_bounded
+from agentgate.protected import FileChange, parse_name_status
 from agentgate.spec import CheckSpec, TaskSpec
 from agentgate.status import write_marker
 from agentgate.validation import ModelPair
@@ -178,6 +179,26 @@ def _git_artifacts(worktree: Worktree) -> tuple[str, str]:
     if commits:
         patch = f"{patch}\n--- commits since base ---\n{commits}\n"
     return patch, status.stdout
+
+
+def read_changes(worktree: Path, base_commit: str | None) -> tuple[FileChange, ...]:
+    """List changes since the round baseline, with rename detection.
+
+    `git diff <base>` already covers staged and unstaged edits; `git add -A`
+    runs before collection, so new files appear here as `A` too.
+    """
+
+    reference = base_commit or "HEAD"
+    completed = _run_git(
+        worktree,
+        ["-c", "core.quotepath=false", "diff", "--name-status", "-M", reference],
+    )
+    if completed.returncode != 0:
+        raise CollectorError(
+            "git diff --name-status failed: "
+            + (completed.stderr.strip() or completed.stdout.strip())
+        )
+    return parse_name_status(completed.stdout)
 
 
 def _fenced(content: str, language: str = "text") -> str:

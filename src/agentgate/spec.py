@@ -64,6 +64,10 @@ class TaskSpec:
     budget: BudgetSpec
     before_execute: bool
     before_merge: bool
+    #: Whole-path globs the executor may add to but must not modify or delete.
+    #: Empty means "none declared": nothing is guarded, and the report says so
+    #: instead of pretending the run was protected.
+    protected: tuple[str, ...] = ()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -195,6 +199,7 @@ def load_task(path: Path) -> TaskSpec:
         budget=budget,
         before_execute=document["human_approval"]["before_execute"],
         before_merge=document["human_approval"]["before_merge"],
+        protected=tuple(document.get("protected") or ()),
     )
 
 

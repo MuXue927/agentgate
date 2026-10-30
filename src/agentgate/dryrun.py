@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentgate.doctor import DSH_CLI, DSH_EXE
+from agentgate.protected import describe_declared
 from agentgate.spec import TaskSpec, load_task, require_allowed_repo
 from agentgate.validation import ModelPair, evaluate_model_pair
 from agentgate.workspace import Worktree, cleanup_worktree, create_worktree
@@ -28,6 +29,7 @@ class DryRunResult:
                 ),
                 f"Worktree: {self.worktree.path}",
                 f"Branch: {self.worktree.branch}",
+                describe_declared(self.task.protected),
                 "",
                 "Executor command:",
                 shell_join(self.executor_command),

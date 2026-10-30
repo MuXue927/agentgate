@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentgate.protected import ProtectedResult
 from agentgate.spec import TaskSpec
 from agentgate.status import write_state
 
@@ -138,6 +139,21 @@ def _mechanical_fact(round_list: list[dict[str, Any]]) -> str | None:
     return f"机检：{total}/{total} 通过。"
 
 
+def _protected_fact(round_list: list[dict[str, Any]]) -> str | None:
+    """Never silent: a round produced by this code always carries the field.
+
+    Runs recorded before the field existed have nothing to report, so they get
+    no line instead of an invented "none declared".
+    """
+
+    if not round_list:
+        return None
+    result = ProtectedResult.from_document(round_list[-1].get("protected"))
+    if result is None:
+        return None
+    return result.summary_line()
+
+
 def _conclusion(
     state: dict[str, Any],
     summary: ChangeSummary | None,
@@ -152,6 +168,9 @@ def _conclusion(
     mechanical = _mechanical_fact(round_list)
     if mechanical is not None:
         facts.insert(0, mechanical)
+    protected = _protected_fact(round_list)
+    if protected is not None:
+        facts.insert(0, protected)
     return facts
 
 

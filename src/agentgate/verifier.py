@@ -10,13 +10,20 @@ from pathlib import Path
 from typing import Any
 
 from agentgate.adapters.codex import CodexAdapter, resolve_executable
-from agentgate.collector import CheckOutput, check_slug, render_verifier_input
+from agentgate.collector import (
+    CheckOutput,
+    CollectorError,
+    check_slug,
+    read_changes,
+    render_verifier_input,
+)
 from agentgate.expectations import (
     MechanicalResult,
     build_mechanical_verdict,
     evaluate_checks,
 )
 from agentgate.proc import run_bounded
+from agentgate.protected import FileChange, ProtectedResult, evaluate_protected
 from agentgate.spec import (
     PROJECT_ROOT,
     TaskSpec,
@@ -56,12 +63,15 @@ class VerificationOutcome:
     before_status: str = ""
     after_status: str = ""
     mechanical: MechanicalResult | None = None
+    protected: ProtectedResult | None = None
 
 
 CommandRunner = Callable[
     [tuple[str, ...], Path, float, str],
     subprocess.CompletedProcess[str],
 ]
+
+ChangeReader = Callable[[Path, str | None], tuple[FileChange, ...]]
 
 
 def _run_command(
@@ -213,6 +223,34 @@ def _write_mechanical(round_dir: Path, mechanical: MechanicalResult) -> None:
         json.dumps(mechanical.as_document(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _write_protected(round_dir: Path, protected: ProtectedResult) -> None:
+    (round_dir / "protected.json").write_text(
+        json.dumps(protected.as_document(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _protected_gate(
+    task: TaskSpec,
+    worktree: Path,
+    base_commit: str | None,
+    change_reader: ChangeReader,
+) -> ProtectedResult:
+    """Decide whether the executor touched a guarded path.
+
+    Runs before the mechanical gate on purpose: a loosened test file still
+    exits 0, so the mechanical gate would see a fully green round and hand it
+    to the verifier. The cheapest place to stop that is here.
+    """
+
+    try:
+        changes = change_reader(worktree, base_commit)
+    except CollectorError as exc:
+        # Fail closed: no evidence about the tree means no PASS.
+        raise VerificationError(f"protected path check failed: {exc}") from exc
+    return evaluate_protected(task.protected, changes)
 
 
 def regenerate_verifier_input(
@@ -376,6 +414,46 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         verdict.unlink()
     for stale in round_dir.glob("verifier-attempt-*"):
         stale.unlink()
+    for artifact in ("mechanical.json", "protected.json"):
+        path = round_dir / artifact
+        if path.is_file():
+            path.unlink()
+
+
+def _record_protected_block(
+    run_dir: Path,
+    round_no: int,
+    protected: ProtectedResult,
+    reason: str,
+) -> None:
+    """Mark the round BLOCKED in state.json without inventing a verdict."""
+
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for entry in state.get("rounds", []):
+        if entry.get("round") == round_no:
+            entry["status"] = "blocked"
+            entry["blocked_reason"] = reason
+            entry["protected"] = protected.as_document()
+            # A blocked round has no verdict and no mechanical result. Leaving
+            # a previous PASS here (e.g. after `ag verify --force`) makes the
+            # report say "R1 PASS" and "BLOCKED" at the same time.
+            for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
+                entry.pop(stale_key, None)
+            break
+    else:
+        return
+    state["terminal_reason"] = reason
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _record_round_in_state(
@@ -383,6 +461,7 @@ def _record_round_in_state(
     round_no: int,
     verdict: dict[str, Any],
     mechanical: MechanicalResult | None = None,
+    protected: ProtectedResult | None = None,
 ) -> None:
     """Write the verdict back into runs/<id>/state.json.
 
@@ -410,6 +489,8 @@ def _record_round_in_state(
             entry["verdict"] = verdict
             if mechanical is not None:
                 entry["mechanical"] = mechanical.as_document()
+            if protected is not None:
+                entry["protected"] = protected.as_document()
             break
     else:
         return
@@ -427,6 +508,7 @@ def verify_round(
     runs_root: Path | None = None,
     adapter: CodexAdapter | None = None,
     command_runner: CommandRunner = _run_command,
+    change_reader: ChangeReader = read_changes,
     force: bool = False,
     manage_fail_status: bool = True,
 ) -> VerificationOutcome:
@@ -483,11 +565,33 @@ def verify_round(
     )
 
     stored_checks = _stored_checks(task, round_dir)
+    before_status = _git_status(worktree)
+    base_commit = str(state.get("base_commit") or "") or None
+    # Order matters: protected paths, then the mechanical gate, then the
+    # model. A loosened test file exits 0, so the mechanical gate alone would
+    # wave it through.
+    protected = _protected_gate(task, worktree, base_commit, change_reader)
+    _clear_previous_outcome(run_dir, round_dir)
+    _write_protected(round_dir, protected)
+
+    if not protected.ok:
+        reason = protected.reason()
+        _record_protected_block(run_dir, round_no, protected, reason)
+        _mark_blocked(round_dir, reason)
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            before_status=before_status,
+            after_status=before_status,
+            protected=protected,
+        )
+
     mechanical = evaluate_checks(stored_checks)
     _write_mechanical(round_dir, mechanical)
     verifier_input = regenerate_verifier_input(task, round_dir)
-    _clear_previous_outcome(run_dir, round_dir)
-    before_status = _git_status(worktree)
 
     if not mechanical.ok:
         # A model PASS here would be an opinion about evidence that already
@@ -497,7 +601,7 @@ def verify_round(
             json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        _record_round_in_state(run_dir, round_no, verdict, mechanical)
+        _record_round_in_state(run_dir, round_no, verdict, mechanical, protected)
         if manage_fail_status:
             set_status(run_dir, "failed")
         return VerificationOutcome(
@@ -577,7 +681,7 @@ def verify_round(
         json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    _record_round_in_state(run_dir, round_no, verdict, mechanical)
+    _record_round_in_state(run_dir, round_no, verdict, mechanical, protected)
     if verdict["verdict"] == "PASS":
         write_marker(run_dir, "DONE")
         set_status(run_dir, "done")
@@ -593,6 +697,7 @@ def verify_round(
         before_status=before_status,
         after_status=before_status,
         mechanical=mechanical,
+        protected=protected,
     )
 
 
