@@ -167,3 +167,30 @@ git merge --no-ff ag/<task-id>-r<N>
 [docs/design.md](docs/design.md) 和
 [AgentGate v0.2 实现报告](docs/AgentGate-v0.2-实现报告.md)。逐步实现和
 验证据见 [STEP 5 报告](docs/steps/step-5-loop.md)。
+
+## 受以下项目启发
+
+AgentGate 的机制不是凭空来的。以下项目在"执行 / 验收 / 重试"上做过公开的
+探索，本项目的取舍参考了它们的文档与设计记录。**只借鉴机制与问题意识，
+没有复制任何代码、提示词、字段命名或目录结构**；逐条差异见
+[docs/borrowings.md](docs/borrowings.md)，调研笔记见
+[docs/landscape.md](docs/landscape.md)。
+
+- [the-open-engine/zeroshot](https://github.com/the-open-engine/zeroshot)：
+  盲验收（validator 看不到 worker 上下文）、崩溃可恢复的状态。
+- [mateaix/loope](https://github.com/mateaix/loope)：implement → review →
+  verify 的迭代上限，以及"验证命令以退出码为硬门"。
+- [andromarces/agent-loops](https://github.com/andromarces/agent-loops)：
+  运行时在评审沙箱之外执行测试、结果作为不可信证据；reviewer 前后做工作树
+  变更检测。
+- [github/spec-kit](https://github.com/github/spec-kit)：规格即可执行契约，
+  以及"同一发现连续出现说明文档之间互相矛盾"。
+- [sxivansx/loop-engineering](https://github.com/sxivansx/loop-engineering)：
+  循环六原语与"无净进展即停机"。
+- [formin/spec-kit-loop](https://github.com/formin/spec-kit-loop)：maker
+  不能自评、不可判定要单独成态。
+- [sangrokjung/claude-forge · review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md)：
+  判决必须绑定当前版本，rechecker 只谈"改了什么、对应哪条 finding"。
+
+以上项目均为 MIT 或公开发布的文档/技能；本项目未包含其任何代码。若你发现
+有遗漏的出处，请开 issue——标注比"看起来像原创"重要。

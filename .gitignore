@@ -33,3 +33,6 @@ dist/
 # 这两条是双保险，万一有人放进仓库也拦住。
 tasks.local/
 *.local.task.yaml
+
+# WorkBuddy 本地工作数据
+.workbuddy/

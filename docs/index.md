@@ -43,6 +43,7 @@ uv run ag report <task-id>
 
 - [本页：文档索引](index.md)
 - [如何写 task.yaml（详细方法与准则）](task-yaml-guide.md)
+- [同类项目调研与可借鉴清单](landscape.md)
 - [v0.2 验收记录](acceptance.md)
 - [v0.2 设计方案](design.md)
 - [v0.2 实现报告](AgentGate-v0.2-实现报告.md)
