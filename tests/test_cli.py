@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from typer.testing import CliRunner
 
 from agentgate.cli import app
 from agentgate.doctor import DoctorReport
+from agentgate.spec import PROJECT_ROOT
 
 
 class TestCli:
@@ -17,6 +19,7 @@ class TestCli:
         assert "doctor" in result.output
         assert "run" in result.output
         assert "clean" in result.output
+        assert "report" in result.output
 
     def test_doctor_route_returns_zero_when_required_probes_pass(self) -> None:
         report = DoctorReport(
@@ -105,3 +108,23 @@ class TestCli:
 
         assert result.exit_code == 2
         assert "BLOCKED: verdict extraction failed twice" in result.output
+
+    def test_report_route_uses_existing_state(self) -> None:
+        state = {"status": "done", "rounds": []}
+        run_dir = PROJECT_ROOT / "runs" / "fixture"
+        task_path = run_dir / "task.yaml"
+        with (
+            patch("agentgate.cli.PROJECT_ROOT", PROJECT_ROOT),
+            patch("agentgate.cli.read_state", return_value=state),
+            patch("agentgate.cli.load_task") as load,
+            patch(
+                "agentgate.cli.write_report", return_value=run_dir / "report.md"
+            ) as write,
+            patch.object(Path, "is_file", return_value=True),
+        ):
+            result = CliRunner().invoke(app, ["report", "fixture"])
+
+        assert result.exit_code == 0
+        load.assert_called_once_with(task_path)
+        write.assert_called_once()
+        assert "report.md" in result.output

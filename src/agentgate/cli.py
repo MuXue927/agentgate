@@ -16,7 +16,9 @@ from agentgate.orchestrator import (
     resume_task,
     start_task,
 )
-from agentgate.spec import SpecError
+from agentgate.report import write_report
+from agentgate.spec import PROJECT_ROOT, SpecError, load_task
+from agentgate.status import read_state
 from agentgate.validation import ModelPairError
 from agentgate.verifier import VerificationError, verify_run
 from agentgate.workspace import WorkspaceError, clean_agent_worktrees
@@ -251,6 +253,29 @@ def resume(
         2,
     )
     raise typer.Exit(code=code)
+
+
+@app.command()
+def report(
+    task_id: Annotated[
+        str,
+        typer.Argument(help="Task id under runs/."),
+    ],
+) -> None:
+    """Regenerate report.md from an existing run without model calls."""
+
+    run_dir = PROJECT_ROOT / "runs" / task_id
+    task_path = run_dir / "task.yaml"
+    if not task_path.is_file():
+        typer.echo(f"Task snapshot not found: {task_path}", err=True)
+        raise typer.Exit(code=1)
+    state = read_state(run_dir)
+    if state is None:
+        typer.echo(f"Run state not found: {run_dir / 'state.json'}", err=True)
+        raise typer.Exit(code=1)
+    task = load_task(task_path)
+    path = write_report(task, state, run_dir=run_dir, repo=task.repo)
+    typer.echo(str(path))
 
 
 def main() -> None:
