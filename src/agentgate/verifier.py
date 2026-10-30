@@ -11,6 +11,11 @@ from typing import Any
 
 from agentgate.adapters.codex import CodexAdapter, resolve_executable
 from agentgate.collector import CheckOutput, check_slug, render_verifier_input
+from agentgate.expectations import (
+    MechanicalResult,
+    build_mechanical_verdict,
+    evaluate_checks,
+)
 from agentgate.spec import (
     PROJECT_ROOT,
     TaskSpec,
@@ -49,6 +54,7 @@ class VerificationOutcome:
     blocked_reason: str = ""
     before_status: str = ""
     after_status: str = ""
+    mechanical: MechanicalResult | None = None
 
 
 CommandRunner = Callable[
@@ -206,6 +212,13 @@ def _stored_checks(task: TaskSpec, round_dir: Path) -> tuple[CheckOutput, ...]:
     return tuple(checks)
 
 
+def _write_mechanical(round_dir: Path, mechanical: MechanicalResult) -> None:
+    (round_dir / "mechanical.json").write_text(
+        json.dumps(mechanical.as_document(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def regenerate_verifier_input(
     task: TaskSpec,
     round_dir: Path,
@@ -358,7 +371,10 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
 
 
 def _record_round_in_state(
-    run_dir: Path, round_no: int, verdict: dict[str, Any]
+    run_dir: Path,
+    round_no: int,
+    verdict: dict[str, Any],
+    mechanical: MechanicalResult | None = None,
 ) -> None:
     """Write the verdict back into runs/<id>/state.json.
 
@@ -384,6 +400,8 @@ def _record_round_in_state(
         if entry.get("round") == round_no:
             entry["status"] = status
             entry["verdict"] = verdict
+            if mechanical is not None:
+                entry["mechanical"] = mechanical.as_document()
             break
     else:
         return
@@ -456,9 +474,34 @@ def verify_round(
         verifier_scaffold=task.verifier.harness,
     )
 
+    stored_checks = _stored_checks(task, round_dir)
+    mechanical = evaluate_checks(stored_checks)
+    _write_mechanical(round_dir, mechanical)
     verifier_input = regenerate_verifier_input(task, round_dir)
     _clear_previous_outcome(run_dir, round_dir)
     before_status = _git_status(worktree)
+
+    if not mechanical.ok:
+        # A model PASS here would be an opinion about evidence that already
+        # contradicts itself, so the model is not called at all.
+        verdict = build_mechanical_verdict(mechanical, stored_checks)
+        (round_dir / "verdict.json").write_text(
+            json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        _record_round_in_state(run_dir, round_no, verdict, mechanical)
+        if manage_fail_status:
+            set_status(run_dir, "failed")
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=verdict,
+            attempts=(),
+            before_status=before_status,
+            after_status=before_status,
+            mechanical=mechanical,
+        )
+
     selected = adapter or CodexAdapter()
     attempts: list[AttemptResult] = []
     parse_error = ""
@@ -526,7 +569,7 @@ def verify_round(
         json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    _record_round_in_state(run_dir, round_no, verdict)
+    _record_round_in_state(run_dir, round_no, verdict, mechanical)
     if verdict["verdict"] == "PASS":
         write_marker(run_dir, "DONE")
         set_status(run_dir, "done")
@@ -541,6 +584,7 @@ def verify_round(
         attempts=tuple(attempts),
         before_status=before_status,
         after_status=before_status,
+        mechanical=mechanical,
     )
 
 

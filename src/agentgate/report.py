@@ -123,17 +123,36 @@ def _decision_fact(state: dict[str, Any]) -> str:
     return f"暂不合并；阻塞原因：{reason or '需要人工处理'}。"
 
 
+def _mechanical_fact(round_list: list[dict[str, Any]]) -> str | None:
+    if not round_list:
+        return None
+    mechanical = round_list[-1].get("mechanical")
+    if not isinstance(mechanical, dict):
+        return None
+    failed = mechanical.get("failed") or []
+    passed = mechanical.get("passed") or []
+    total = len(passed) + len(failed)
+    if failed:
+        names = "、".join(str(item.get("name")) for item in failed)
+        return f"机检未通过：{names}（{len(passed)}/{total} 通过）。"
+    return f"机检：{total}/{total} 通过。"
+
+
 def _conclusion(
     state: dict[str, Any],
     summary: ChangeSummary | None,
 ) -> list[str]:
     rounds = state.get("rounds", [])
     round_list = rounds if isinstance(rounds, list) else []
-    return [
+    facts = [
         _round_facts(round_list),
         _summary_fact(summary),
         _decision_fact(state),
-    ][:3]
+    ]
+    mechanical = _mechanical_fact(round_list)
+    if mechanical is not None:
+        facts.insert(0, mechanical)
+    return facts
 
 
 def _parse_numstat(output: str, statuses: dict[str, str]) -> ChangeSummary:

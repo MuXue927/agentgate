@@ -194,8 +194,21 @@ def verify(
         raise typer.Exit(code=2)
 
     verdict = outcome.verdict
-    typer.echo(f"Verdict: {verdict['verdict']}")
-    typer.echo(verdict.get("summary", ""))
+    mechanical = getattr(outcome, "mechanical", None)
+    if mechanical is not None:
+        if mechanical.ok:
+            typer.echo(f"机检: {mechanical.total}/{mechanical.total} 通过")
+        else:
+            details = "；".join(
+                f"{item.name}（{item.reason}）" for item in mechanical.failed
+            )
+            typer.echo(f"机检未通过：{details}")
+    if mechanical is not None and not mechanical.ok:
+        typer.echo(f"Verdict: {verdict['verdict']}（机检，未调用验收官）")
+    else:
+        typer.echo(
+            f"Verdict: {verdict['verdict']}（验收官）— {verdict.get('summary', '')}"
+        )
     for defect in verdict.get("defects", []):
         typer.echo(
             f"{defect['id']} [{defect['severity']}] {defect['where']}: {defect['why']}"
@@ -209,6 +222,29 @@ def _print_outcome(outcome: RunOutcome) -> None:
     for event in outcome.events:
         typer.echo(event)
     state = outcome.state
+    rounds = state.get("rounds") or []
+    last = rounds[-1] if rounds else {}
+    mechanical = last.get("mechanical") if isinstance(last, dict) else None
+    verdict = last.get("verdict") if isinstance(last, dict) else None
+    mechanical_failed = isinstance(mechanical, dict) and bool(mechanical.get("failed"))
+    if isinstance(mechanical, dict):
+        if mechanical_failed:
+            details = "；".join(
+                f"{item.get('name')}（{item.get('reason')}）"
+                for item in mechanical.get("failed") or []
+            )
+            typer.echo(f"机检未通过：{details}")
+        else:
+            total = len(mechanical.get("passed") or [])
+            typer.echo(f"机检: {total}/{total} 通过")
+    if isinstance(verdict, dict):
+        if mechanical_failed:
+            typer.echo(f"Verdict: {verdict.get('verdict')}（机检，未调用验收官）")
+        else:
+            typer.echo(
+                f"Verdict: {verdict.get('verdict')}（验收官）"
+                f"— {verdict.get('summary', '')}"
+            )
     typer.echo(
         f"{str(state.get('status', 'unknown')).upper()} + "
         f"{len(state.get('rounds', []))} 轮 + "
