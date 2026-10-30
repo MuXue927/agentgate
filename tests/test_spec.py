@@ -13,7 +13,16 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_all_templates_validate() -> None:
     templates = sorted((ROOT / "templates").glob("*.task.yaml"))
 
-    assert len(templates) == 4
+    # 断言"四个必备模板都在"，而不是"正好四个"：新增模板（如 minimal）
+    # 不该让这条测试变红。
+    names = {path.name for path in templates}
+    required = {
+        "add-feature.task.yaml",
+        "fix-bug.task.yaml",
+        "write-tests.task.yaml",
+        "update-docs.task.yaml",
+    }
+    assert required <= names
     assert [load_task(path).id for path in templates]
     assert all("<your-repo>" in path.read_text(encoding="utf-8") for path in templates)
 

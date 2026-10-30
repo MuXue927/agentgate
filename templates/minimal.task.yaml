@@ -1,0 +1,26 @@
+# 最小可用任务模板 —— 复制这个文件改 3 处（repo / goal / checks）就能跑。
+# 详细说明见 docs/task-yaml-guide.md §0.5。
+#
+# 必改：repo（你的 git 仓库绝对路径）、goal（要做什么）、checks（怎么算做完）
+
+id: minimal-task                      # ← 1) 任务 id，也是 runs/<id>/ 目录名
+repo: D:/Projects/<your-repo>         # ← 2) 目标仓库（必须是 git 仓库，工作树要干净）
+goal: |
+  <3) 一段话讲清：要做什么、产出在哪个路径、不要动什么>
+  不要修改其他文件。
+executor: {harness: codex, model: deepseek-v4-flash, sandbox: danger-full-access}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free, sandbox: danger-full-access}
+constraints:
+  - 只允许修改 <目标文件或目录>。
+  - 不要 push 或 merge；不要执行 git commit 或 git add。
+checks:
+  # 每条检查 = 一条命令 + 期望输出。执行方看得见 run，看不见 expect，
+  # 所以"必须产出什么"要写在 run 命令里或 goal 里。
+  - name: target-exists
+    run: python -c "import pathlib,sys; p=pathlib.Path('<目标文件>'); print('exists:',p.is_file()); sys.exit(0 if p.is_file() else 1)"
+    expect: {exit: 0}
+  - name: tests
+    run: uv run pytest -q
+    expect: {exit: 0, stdout_not_contains: failed}
+budget: {max_rounds: 2, max_minutes_per_round: 10, max_total_minutes: 20}
+human_approval: {before_execute: false, before_merge: true}

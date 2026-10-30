@@ -2,6 +2,87 @@
 
 > 适用版本：AgentGate v0.2
 > 配套：`schemas/task.schema.json`（机器校验）、`templates/`（四类模板）
+>
+> **这份文档给谁看**
+> - 第一次用 AgentGate 的人：读 §0.5 就能跑起来，其余按需查。
+> - 已经跑过、想写复杂任务的人：§1–§4 是主体，§6 九问自检是发布前必过的一关。
+> - 接手这个项目的人：§0 的机制说明是理解整套设计的最短路径。
+
+---
+
+## 0.5 五分钟上手（第一次用就读这段）
+
+### 前置条件
+
+| 项 | 检查方式 |
+|---|---|
+| Python 3.12 + `uv` | `uv --version` |
+| `codex` CLI 在 PATH | `codex --version` |
+| 代理可用（模型走本地代理） | `uv run ag doctor` 的 required 项全 PASS |
+| 一个干净的 git 仓库作为目标 | `git status --porcelain` 为空 |
+
+### 第一步：存一个最小任务
+
+最快的办法是复制模板：
+
+```bash
+cp templates/minimal.task.yaml D:/Projects/hello-first.task.yaml
+# 然后改 3 处：id / repo / goal（以及 checks 里的目标文件）
+```
+
+或者直接照抄下面这份（路径随意，**任务文件不必放进仓库**）：
+
+```yaml
+id: hello-first
+repo: D:/Projects/<你的仓库>        # ← 改成你的 git 仓库绝对路径
+goal: |
+  在仓库根目录新建 hello.txt，内容恰好是 ok（不含多余空行）。
+  不要修改其他任何文件。
+executor: {harness: codex, model: deepseek-v4-flash, sandbox: danger-full-access}
+verifier: {harness: codex, model: nvidia/nemotron-3.5-lightning:free, sandbox: danger-full-access}
+constraints:
+  - 只允许新建 hello.txt。
+  - 不要 push 或 merge；不要执行 git commit 或 git add。
+checks:
+  - name: hello-content
+    run: python -c "import pathlib,sys; p=pathlib.Path('hello.txt'); t=p.read_text(encoding='utf-8').strip() if p.is_file() else '<missing>'; print('content:',t); sys.exit(0 if t=='ok' else 1)"
+    expect: {exit: 0}
+budget: {max_rounds: 2, max_minutes_per_round: 5, max_total_minutes: 10}
+human_approval: {before_execute: false, before_merge: true}
+```
+
+### 第二步：干跑（零 API 成本）
+
+```bash
+cd D:/Projects/agentgate
+uv run ag run --dry-run D:/Projects/hello-first.task.yaml
+```
+
+会打印：双盲档位、worktree 路径、分支名、**将发给执行方的完整命令**。确认它要改的是你预期的仓库，再往下走。
+
+### 第三步：真跑
+
+```bash
+uv run ag run D:/Projects/hello-first.task.yaml
+```
+
+约 1–2 分钟、约 $0.01。中途不用管。
+
+### 第四步：看结果并合并
+
+```bash
+cat runs/hello-first/report.md        # 一页纸：做了什么、改了几个文件、能不能合
+git merge --no-ff ag/hello-first-r1   # 合并是人的动作，ag 永不自动合并
+uv run ag clean hello-first           # 清理 worktree 与分支
+```
+
+### 成功的标志（三条全中才算跑通）
+
+1. `runs/hello-first/DONE` 存在（不是 `FAILED` / `BLOCKED`）
+2. `report.md` 的结论段写着"建议合并"，且列出改动的文件
+3. `git show ag/hello-first-r1 --stat` 里有你预期的那一个文件
+
+如果卡住了：**先看 §7 失败诊断速查**，再看 `runs/<id>/round-1/executor.log`（执行方原始输出）。
 
 ---
 
