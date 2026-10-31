@@ -74,3 +74,25 @@ def test_clean_task_only_removes_matching_agent_worktree(tmp_path: Path) -> None
     assert not selected.path.exists()
     assert kept.path.exists()
     assert git(repo, "branch", "--list", "ag/other-r1").stdout.strip()
+
+
+def test_permission_failure_names_the_administrator_steps() -> None:
+    """`Directory not empty` alone reads like a broken tool, not a DENY ACE."""
+
+    from agentgate.workspace import _permission_hint
+
+    path = Path("D:/Projects/agentgate/wt/tmp-evidence-probe-r1")
+    hint = _permission_hint(
+        path, "error: failed to delete '.pytest_cache': Directory not empty"
+    )
+
+    assert "权限异常" in hint
+    assert f'takeown /F "{path}" /R /D Y' in hint
+    assert f'icacls "{path}" /reset /T /C' in hint
+    assert f'rd /s /q "{path}"' in hint
+
+
+def test_unrelated_removal_failure_gets_no_permission_hint() -> None:
+    from agentgate.workspace import _permission_hint
+
+    assert _permission_hint(Path("wt/x"), "fatal: 'wt/x' is a main working tree") == ""

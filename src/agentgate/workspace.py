@@ -122,6 +122,32 @@ def _agent_branches(repo: Path, task_id: str | None) -> set[str]:
     return {branch for branch in branches if pattern.fullmatch(branch)}
 
 
+_PERMISSION_MARKERS = ("directory not empty", "permission denied", "access is denied")
+
+
+def _permission_hint(path: Path, stderr: str) -> str:
+    """Explain the one removal failure that an unprivileged run cannot fix.
+
+    A sandbox-created directory can carry a DENY ACE for the current user. Git
+    then reports "Directory not empty" for every attempt, `Get-Acl` refuses to
+    read it, and no amount of retrying helps. The bare git message reads like a
+    broken tool, so name the cause and the three commands an administrator
+    runs. Deliberately just text: `wt/` is a gitignored runtime directory, and
+    one-off ACL accidents do not justify cleanup code.
+    """
+
+    lowered = stderr.lower()
+    if not any(marker in lowered for marker in _PERMISSION_MARKERS):
+        return ""
+    return (
+        f"\n无法删除 {path}：权限异常（可能是执行方沙箱遗留的不可读目录）。"
+        "\n需要管理员终端执行："
+        f'\n  takeown /F "{path}" /R /D Y'
+        f'\n  icacls "{path}" /reset /T /C'
+        f'\n  rd /s /q "{path}"'
+    )
+
+
 def clean_agent_worktrees(
     repo: Path,
     *,
@@ -178,7 +204,10 @@ def clean_agent_worktrees(
         removed = _run_git(root, args)
         if removed.returncode != 0:
             stderr = removed.stderr.strip() or removed.stdout.strip()
-            raise WorkspaceError(f"git worktree remove failed: {entry.path}\n{stderr}")
+            raise WorkspaceError(
+                f"git worktree remove failed: {entry.path}\n{stderr}"
+                + _permission_hint(entry.path, stderr)
+            )
         removed_paths.append(entry.path)
 
     removed_branches: list[str] = []

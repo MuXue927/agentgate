@@ -228,7 +228,13 @@ def build_probes(project_dir: Path) -> tuple[Probe, ...]:
             model=CODEX_VERIFIER_MODEL,
             required=True,
             command=codex_verifier,
-            timeout_s=45,
+            # 75s, not 45s: this is a free-tier model whose p95 sits right on
+            # 45s (measured 45.28s timeout at 17:28, 13.08s pass at 17:29), so
+            # a 45s deadline was a coin flip that flipped the tier to
+            # `unavailable` at random. Two attempts, because one retry costs
+            # less than a false "no verifier available".
+            timeout_s=75,
+            attempts=2,
         ),
         Probe(
             key="codex_tools",

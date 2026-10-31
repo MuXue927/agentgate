@@ -136,6 +136,16 @@ class DoctorTests(unittest.TestCase):
         with self.assertRaisesRegex(ModelPairError, "same model family"):
             require_different_models("deepseek-v4-flash", "deepseek-v4-flash")
 
+    def test_required_verifier_probe_has_a_retry_budget(self) -> None:
+        """The free verifier tier flaps right at 45s; do not treat that as down."""
+
+        probes = {probe.key: probe for probe in build_probes(PROJECT)}
+
+        self.assertEqual(probes["verifier_codex"].timeout_s, 75)
+        self.assertEqual(probes["verifier_codex"].attempts, 2)
+        # Only this probe: a general retry would double every doctor run.
+        self.assertEqual(probes["executor_codex"].attempts, 1)
+
     def test_dsh_probe_bypasses_cmd_and_is_optional(self) -> None:
         probes = {probe.key: probe for probe in build_probes(PROJECT)}
         dsh = probes["verifier_dsh"]
