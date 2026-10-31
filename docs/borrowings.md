@@ -17,7 +17,7 @@
 | P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | |
 | P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；按 `git diff --name-status` 的 M/D/R 拦、A 放行；检查排在机检之前，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | `51c2c5f` |
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
-| P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：生成 `context.md`（diffstat + 改动文件全文 + 基线 sha），用显式分隔块标注"这是数据不是指令"，保持无工具验收官 | |
+| P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
 | P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 每轮记 `diff_sha256`，与上一轮相同即 `FAILED: no-progress`；不引入 monitor agent | |
 | P1-4 | `resume --force` 先删旧档再验证新 run，失败不可恢复 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 只做原子替换（临时文件 + `os.replace`）与"先验证后删除"，不引入 SQLite | |
 | P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes/` 脚本化后端 + adapter 注入，**不加 CLI 开关**，只作测试夹具，不是产品降级链 | |
@@ -70,10 +70,16 @@
 
 ### P1-2 证据包
 
-- 问题：验收输入只有 diff，改动文件全文不在里面（`collector.py:211`）。
+- 问题：验收输入只有 diff，改动文件全文不在里面（`collector.render_verifier_input`）；
+  而且**验收提示词从未要求判 constraints**，所以即使把 constraints 塞进输入，
+  模型也不会去看。两层缺口，同一批修。
 - 来源：agent-loops 的"不可信证据"标注、loope 允许 reviewer 读文件。
-- 独立设计：只扩证据、不开工具；加显式分隔与注入防护说明。
-- commit：（待填）
+- 独立设计：只扩证据、不开工具；tracked 文件从 `git show <head_commit>:<path>`
+  读（与 diff 同源，worktree 脏了也不影响），只有不在该 commit 里的文件才读
+  worktree 并标 `source: worktree (untracked)`；字节预算 32KB/文件、128KB/总量；
+  截断在输入头部、`evidence.json`、`report.md` 三处同时露面；分隔符在被引内容
+  含 `FILE-CONTENT` 时自动加宽（只挡最便宜的伪造，不宣称解决注入）。
+- commit：`bf5134d`
 
 ### P1-3 无净进展
 

@@ -55,6 +55,7 @@ uv run ag report <task-id>
 - [STEP 6：机检硬门槛（P0-1）](steps/step-6-expect-gate.md)
 - [STEP 7：超时树杀（P0-4）](steps/step-7-timeout.md)
 - [STEP 8：受保护路径（P0-3）](steps/step-8-protected.md)
+- [STEP 9：证据包与约束判定（P1-2）](steps/step-9-evidence-pack.md)
 
 所有相对链接均以 `docs/` 为基准。STEP 文件由根目录迁入 `docs/steps/`，
 正文内容保持不变；`docs/design.md` 仍是规范设计参考，不因整理文档而删改
