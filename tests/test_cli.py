@@ -114,7 +114,10 @@ class TestCli:
 
         outcome = SimpleNamespace(
             verdict=None,
-            blocked_reason="no-progress: round 2 diff is identical to round 1",
+            blocked_reason=(
+                "no-progress: round 2 fails the same 1 check(s) as round 1 "
+                "(hello-content)"
+            ),
             failure_reason="no-progress",
         )
         with patch("agentgate.cli.verify_run", return_value=outcome):

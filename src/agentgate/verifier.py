@@ -70,6 +70,11 @@ class VerificationOutcome:
     after_status: str = ""
     mechanical: MechanicalResult | None = None
     protected: ProtectedResult | None = None
+    # Which check sets were compared when the round was stopped for producing
+    # nothing new. `ag run` keeps the state file in memory while it drives the
+    # rounds, so it has to copy this back itself -- otherwise the saved state
+    # loses the detail and the report can only print "R?".
+    no_progress: dict[str, Any] | None = None
 
 
 CommandRunner = Callable[
@@ -581,27 +586,57 @@ def _record_protected_block(
     _record_blocked_round(run_dir, round_no, reason, protected=protected)
 
 
-def _previous_diff_sha(run_dir: Path, round_no: int) -> str:
-    """`diff_sha256` of the round before this one, read from its subject.
+def _previous_mechanical_failures(
+    run_dir: Path,
+    round_no: int,
+) -> tuple[str, ...] | None:
+    """Which checks failed mechanically in the round before this one.
 
-    Reuses the field P0-2 already wrote instead of hashing `diff.patch` again:
-    two independent hashes would eventually disagree, and then the subject
-    would say one thing and the no-progress check another. Runs recorded before
-    the subject existed have nothing to compare against, so they are never
-    judged as no-progress.
+    The comparison is against `mechanical.failed`, not against the previous
+    diff. A byte-identical diff was never the interesting case: each round's
+    patch is taken against the previous round's branch, so it can only repeat
+    when two different baselines produce the same bytes, and "nothing changed
+    at all" is already refused by the collector (`NoChangesError`). Rounds that
+    burn budget look like this instead: the executor rewrites the code, the
+    same checks fail again.
+
+    `None` means "no baseline to compare against" -- a first round, a round
+    stopped at the protected gate before the checks ran, or a run recorded
+    before P0-1 wrote `mechanical`. `()` means the checks ran and all passed.
+    In neither case is a verdict invented.
     """
 
     if round_no < 2:
-        return ""
-    path = run_dir / f"round-{round_no - 1}" / "subject.json"
-    if not path.is_file():
-        return ""
+        return None
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return None
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
+        state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return ""
-    value = document.get("diff_sha256") if isinstance(document, dict) else None
-    return str(value) if isinstance(value, str) else ""
+        return None
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, list):
+        return None
+    entry = next(
+        (item for item in rounds if item.get("round") == round_no - 1),
+        None,
+    )
+    if not isinstance(entry, dict):
+        return None
+    # Only a round that ended in a judged failure is a baseline. A round that
+    # never got a verdict (blocked, or still waiting) would make "same checks
+    # failed" a comparison against something that was never answered.
+    if str(entry.get("status") or "") != "verified_fail":
+        return None
+    mechanical = entry.get("mechanical")
+    if not isinstance(mechanical, dict):
+        return None
+    failed = mechanical.get("failed")
+    if not isinstance(failed, list):
+        return None
+    names = [str(item.get("name")) for item in failed if isinstance(item, dict)]
+    return tuple(sorted(names))
 
 
 def _record_no_progress(
@@ -611,39 +646,50 @@ def _record_no_progress(
     *,
     previous_round: int,
     subject: Subject,
-) -> None:
-    """Record a FAILED round: same diff as last time, nobody asked to judge it."""
+    mechanical: MechanicalResult,
+    previous_failed: tuple[str, ...],
+) -> dict[str, Any]:
+    """Record a FAILED round: the checks that failed last time failed again.
 
+    Returns the comparison it recorded, so a caller that keeps the run state in
+    memory (`ag run`) can write the same detail back instead of dropping it.
+    """
+
+    failing = [item.name for item in mechanical.failed]
+    detail = {
+        "previous_round": previous_round,
+        "failing_checks": failing,
+        "previous_failing_checks": list(previous_failed),
+    }
     state_path = run_dir / "state.json"
     if not state_path.is_file():
-        return
+        return detail
     try:
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return
+        return detail
     for entry in state.get("rounds", []):
         if entry.get("round") == round_no:
             entry["status"] = "failed"
             entry["failure_reason"] = "no-progress"
-            entry["no_progress"] = {
-                "previous_round": previous_round,
-                "diff_sha256": subject.diff_sha256,
-            }
-            # The subject is what proves the claim, so it stays. A verdict or
-            # mechanical result from an earlier `--force` would contradict the
-            # round's own status, so those go.
+            entry["no_progress"] = detail
+            # The subject and this round's own mechanical result are the proof
+            # of the claim, so they stay. A verdict from an earlier `--force`
+            # would contradict the round's status, so that goes.
             entry["subject"] = subject.as_document()
-            for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
+            entry["mechanical"] = mechanical.as_document()
+            for stale_key in ("verdict", "defect_fingerprints"):
                 entry.pop(stale_key, None)
             break
     else:
-        return
+        return detail
     state["terminal_reason"] = reason
     state["updated_at"] = datetime.now().isoformat(timespec="seconds")
     state_path.write_text(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+    return detail
 
 
 def _record_round_in_state(
@@ -759,8 +805,8 @@ def verify_round(
     before_head = _git_head(worktree)
     base_commit = str(state.get("base_commit") or "") or None
     # Order matters: protected paths, then the mechanical gate, then the
-    # model. A loosened test file exits 0, so the mechanical gate alone would
-    # wave it through.
+    # no-progress gate, then the model. A loosened test file exits 0, so the
+    # mechanical gate alone would wave it through.
     changes = _read_changes(worktree, base_commit, change_reader)
     _clear_previous_outcome(run_dir, round_dir)
 
@@ -790,37 +836,6 @@ def verify_round(
             after_status=before_status,
         )
 
-    previous_sha = _previous_diff_sha(run_dir, round_no)
-    if previous_sha and previous_sha == subject.diff_sha256:
-        # Order is deliberate: the diff is byte-identical to last round, so
-        # protected and the mechanical gate would repeat their previous answer,
-        # and asking the model again would be asking it about the same evidence
-        # a second time. This is a real FAILED ending, not a BLOCKED one.
-        reason = (
-            "no-progress: round "
-            f"{round_no} diff is identical to round {round_no - 1} "
-            f"(sha256 {subject.diff_sha256[:8]})"
-        )
-        _record_no_progress(
-            run_dir,
-            round_no,
-            reason,
-            previous_round=round_no - 1,
-            subject=subject,
-        )
-        write_marker(run_dir, "FAILED", reason)
-        set_status(run_dir, "failed")
-        return VerificationOutcome(
-            task_id=task_id,
-            round_dir=round_dir,
-            verdict=None,
-            attempts=(),
-            blocked_reason=reason,
-            failure_reason="no-progress",
-            before_status=before_status,
-            after_status=before_status,
-        )
-
     protected = _protected_gate(task, changes)
     _write_protected(round_dir, protected)
 
@@ -841,6 +856,43 @@ def verify_round(
 
     mechanical = evaluate_checks(stored_checks)
     _write_mechanical(round_dir, mechanical)
+
+    # The no-progress gate needs this round's own mechanical result, so it sits
+    # after the checks run -- but still before the evidence pack and before the
+    # model. Comparing the failing set (deterministic, no model wording) rather
+    # than the diff means it survives a rewritten diff that fixes nothing.
+    previous_failed = _previous_mechanical_failures(run_dir, round_no)
+    current_failed = tuple(sorted(item.name for item in mechanical.failed))
+    if previous_failed and previous_failed == current_failed:
+        names = ", ".join(previous_failed)
+        reason = (
+            f"no-progress: round {round_no} fails the same "
+            f"{len(previous_failed)} check(s) as round {round_no - 1} ({names})"
+        )
+        detail = _record_no_progress(
+            run_dir,
+            round_no,
+            reason,
+            previous_round=round_no - 1,
+            subject=subject,
+            mechanical=mechanical,
+            previous_failed=previous_failed,
+        )
+        write_marker(run_dir, "FAILED", reason)
+        set_status(run_dir, "failed")
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            failure_reason="no-progress",
+            before_status=before_status,
+            after_status=before_status,
+            mechanical=mechanical,
+            no_progress=detail,
+        )
+
     # Full text of what changed, from the round's commit: the diff alone
     # cannot show that a new call site names a function that does not exist.
     evidence = collect_evidence(worktree, recorded_head, changes)

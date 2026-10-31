@@ -719,14 +719,20 @@ def test_mechanical_verdict_carries_the_subject_too(tmp_path: Path) -> None:
         cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
 
 
-# --- P1-3: a round that produced nothing new is not worth judging ----------
+# --- P1-3: a round that fails the same checks has not moved ----------------
+#
+# The criterion used to be "the round's diff is byte-identical to the previous
+# one". That was unreachable: each round's patch is taken against the previous
+# round's branch, and "nothing changed at all" is refused earlier by the
+# collector. So the rule is now the mechanical failing set, which is
+# deterministic and matches what a wasted round actually looks like.
 
 
-def add_round(runs_root: Path, round_no: int, *, diff_extra: str = "") -> Path:
+def add_round(runs_root: Path, round_no: int) -> Path:
     """Stand in for a second execution by copying the frozen round-1 artifacts.
 
-    Copying rather than re-running the executor keeps the diff byte-identical,
-    which is exactly the condition under test. `DONE` is removed because a real
+    Copying keeps the check evidence identical -- the executor rewrote the code
+    and the same checks failed again. `DONE` is removed because a real
     orchestrator only writes it once the whole run ends.
     """
 
@@ -738,31 +744,61 @@ def add_round(runs_root: Path, round_no: int, *, diff_extra: str = "") -> Path:
     shutil.copytree(source / "artifacts", target / "artifacts")
     for name in ("changed_files.txt", "state.json"):
         shutil.copy2(source / name, target / name)
-    patch_text = (source / "diff.patch").read_text(encoding="utf-8")
-    marker = "\n--- git status --porcelain ---\n"
-    patch, status = patch_text.rsplit(marker, 1)
-    (target / "diff.patch").write_text(
-        f"{patch}{diff_extra}{marker}{status}",
-        encoding="utf-8",
-    )
+    shutil.copy2(source / "diff.patch", target / "diff.patch")
     return target
 
 
-def write_run_state(runs_root: Path, worktree: Path, rounds: int = 2) -> None:
-    """Point the run state at the real HEAD so the stale-subject gate stays quiet."""
+def add_second_check(runs_root: Path, round_no: int = 1) -> None:
+    """Give the run a second check, so "a different set" means {B}, not {}."""
 
-    head = git(worktree, "rev-parse", "HEAD").stdout.strip()
-    (runs_root / "verifier-fixture" / "state.json").write_text(
-        json.dumps(
-            {
-                "rounds": [
-                    {"round": number, "status": "executed", "head_commit": head}
-                    for number in range(1, rounds + 1)
-                ]
-            }
+    run_dir = runs_root / "verifier-fixture"
+    task_path = run_dir / "task.yaml"
+    text = task_path.read_text(encoding="utf-8")
+    assert "budget:" in text
+    task_path.write_text(
+        text.replace(
+            "budget:",
+            "  - name: notes-file\n    run: type notes.txt\n    expect: {exit: 0}\nbudget:",
+            1,
         ),
         encoding="utf-8",
     )
+    artifacts = run_dir / f"round-{round_no}" / "artifacts"
+    (artifacts / "02-notes-file.stdout.txt").write_text("", encoding="utf-8")
+    (artifacts / "02-notes-file.stderr.txt").write_text("", encoding="utf-8")
+    (artifacts / "02-notes-file.exit.txt").write_text("1\n", encoding="utf-8")
+
+
+def set_exit(runs_root: Path, round_no: int, stem: str, code: int) -> None:
+    path = (
+        runs_root
+        / "verifier-fixture"
+        / f"round-{round_no}"
+        / "artifacts"
+        / f"{stem}.exit.txt"
+    )
+    assert path.is_file(), path
+    path.write_text(f"{code}\n", encoding="utf-8")
+
+
+def write_run_state(runs_root: Path, worktree: Path, rounds: int = 2) -> None:
+    """Add executed round entries, keeping verdicts already recorded.
+
+    Overwriting the state would erase round 1's `mechanical` and turn every
+    round into a first round, which is exactly the baseline under test.
+    """
+
+    path = runs_root / "verifier-fixture" / "state.json"
+    head = git(worktree, "rev-parse", "HEAD").stdout.strip()
+    state = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    existing = {entry["round"]: entry for entry in state.get("rounds", [])}
+    state["rounds"] = [
+        existing.get(
+            number, {"round": number, "status": "executed", "head_commit": head}
+        )
+        for number in range(1, rounds + 1)
+    ]
+    path.write_text(json.dumps(state), encoding="utf-8")
 
 
 def never_called(calls: list[tuple[str, ...]]):
@@ -773,45 +809,68 @@ def never_called(calls: list[tuple[str, ...]]):
     return runner
 
 
+def counting(calls: list[str], build):
+    """Record each call; build the reply when the call happens.
+
+    The subject a PASS has to echo is written by `verify_round` itself, so the
+    reply cannot be prepared before the call.
+    """
+
+    def runner(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        calls.append(stdin_text)
+        return completed(build() if callable(build) else build)
+
+    return runner
+
+
+def fail_round_one_both_checks(runs_root: Path) -> None:
+    """Round 1: two checks, both failing. `{hello-content, notes-file}`."""
+
+    add_second_check(runs_root, 1)
+    set_exit(runs_root, 1, "01-hello-content", 1)
+    set_exit(runs_root, 1, "02-notes-file", 1)
+
+
 def test_first_round_is_never_no_progress(tmp_path: Path) -> None:
+    """Round 1 has no baseline, so a failing check is a plain FAIL."""
+
     runs_root, worktree = prepare_run(tmp_path)
-    calls = 0
-
-    def count(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
-        nonlocal calls
-        calls += 1
-        return completed(pass_json(runs_root))
-
+    fail_round_one_both_checks(runs_root)
+    calls: list[tuple[str, ...]] = []
     try:
         outcome = verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=count,
+            command_runner=never_called(calls),
         )
 
-        assert calls == 1
-        assert outcome.verdict["verdict"] == "PASS"
+        assert calls == []
+        assert outcome.verdict["verdict"] == "FAIL"
         assert outcome.failure_reason == ""
+        assert outcome.mechanical is not None
+        assert {item.name for item in outcome.mechanical.failed} == {
+            "hello-content",
+            "notes-file",
+        }
     finally:
         cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
 
 
-def test_identical_diff_fails_without_verifier(tmp_path: Path) -> None:
-    """Round 2 repeating round 1 byte for byte is an ending, not a retry."""
+def test_same_failing_check_set_is_no_progress(tmp_path: Path) -> None:
+    """R1 {A,B} then R2 {A,B}: the run ends, and nobody is asked to judge."""
 
     runs_root, worktree = prepare_run(tmp_path)
+    fail_round_one_both_checks(runs_root)
     try:
+        write_run_state(runs_root, worktree, rounds=2)
         first = verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                pass_json(runs_root)
-            ),
+            command_runner=never_called([]),
         )
-        assert first.verdict["verdict"] == "PASS"
+        assert first.verdict["verdict"] == "FAIL"
 
         add_round(runs_root, 2)
-        write_run_state(runs_root, worktree)
         calls: list[tuple[str, ...]] = []
 
         outcome = verify_round(
@@ -833,41 +892,157 @@ def test_identical_diff_fails_without_verifier(tmp_path: Path) -> None:
         entry = state["rounds"][1]
         assert entry["status"] == "failed"
         assert entry["failure_reason"] == "no-progress"
+        assert entry["no_progress"]["previous_round"] == 1
+        assert entry["no_progress"]["failing_checks"] == ["hello-content", "notes-file"]
+        assert entry["no_progress"]["previous_failing_checks"] == [
+            "hello-content",
+            "notes-file",
+        ]
         assert state["terminal_reason"].startswith("no-progress")
-        first_subject = echo_subject(runs_root, 1)
-        assert entry["subject"]["diff_sha256"] == first_subject["diff_sha256"]
     finally:
         cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
 
 
-def test_changed_diff_still_goes_to_verifier(tmp_path: Path) -> None:
+def test_different_failing_set_is_progress(tmp_path: Path) -> None:
+    """R1 {A,B} then R2 {B}: one check was fixed, so the round is judged normally.
+
+    "Normally" here ends at the mechanical verdict, not at the model: a check
+    still fails, so P0-1 already has an answer. What matters is that the round
+    is not labelled no-progress.
+    """
+
     runs_root, worktree = prepare_run(tmp_path)
+    fail_round_one_both_checks(runs_root)
     try:
+        write_run_state(runs_root, worktree, rounds=2)
         verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                pass_json(runs_root)
-            ),
+            command_runner=never_called([]),
         )
 
-        add_round(runs_root, 2, diff_extra="\n# second attempt\n")
-        write_run_state(runs_root, worktree)
-        calls = 0
-
-        def count(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
-            nonlocal calls
-            calls += 1
-            return completed(pass_json(runs_root, 2))
+        add_round(runs_root, 2)
+        set_exit(runs_root, 2, "01-hello-content", 0)
+        calls: list[str] = []
 
         outcome = verify_round(
             "verifier-fixture",
             round_no=2,
             runs_root=runs_root,
-            command_runner=count,
+            command_runner=counting(calls, lambda: pass_json(runs_root, 2)),
         )
 
-        assert calls == 1
+        assert calls == []
+        assert outcome.failure_reason == ""
+        assert outcome.verdict["verdict"] == "FAIL"
+        assert outcome.mechanical is not None
+        assert [item.name for item in outcome.mechanical.failed] == ["notes-file"]
+        state = json.loads(
+            (runs_root / "verifier-fixture" / "state.json").read_text(encoding="utf-8")
+        )
+        assert "failure_reason" not in state["rounds"][1]
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_all_checks_passing_is_not_no_progress(tmp_path: Path) -> None:
+    """Two green rounds fail on the model's word, not on the check set."""
+
+    runs_root, worktree = prepare_run(tmp_path)
+    add_second_check(runs_root, 1)
+    set_exit(runs_root, 1, "01-hello-content", 0)
+    set_exit(runs_root, 1, "02-notes-file", 0)
+    try:
+        write_run_state(runs_root, worktree, rounds=2)
+        verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=lambda command, cwd, timeout, stdin_text: completed(
+                fail_json(runs_root)
+            ),
+        )
+
+        add_round(runs_root, 2)
+        calls: list[str] = []
+
+        outcome = verify_round(
+            "verifier-fixture",
+            round_no=2,
+            runs_root=runs_root,
+            command_runner=counting(calls, lambda: pass_json(runs_root, 2)),
+        )
+
+        assert len(calls) == 1
+        assert outcome.verdict["verdict"] == "PASS"
+        assert outcome.failure_reason == ""
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_previous_mechanical_missing_is_not_no_progress(tmp_path: Path) -> None:
+    """A run recorded before P0-1 has no baseline; do not guess one."""
+
+    runs_root, worktree = prepare_run(tmp_path)
+    fail_round_one_both_checks(runs_root)
+    try:
+        write_run_state(runs_root, worktree, rounds=2)
+        verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=never_called([]),
+        )
+        state_path = runs_root / "verifier-fixture" / "state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["rounds"][0].pop("mechanical")
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        add_round(runs_root, 2)
+        write_run_state(runs_root, worktree, rounds=2)
+        calls: list[tuple[str, ...]] = []
+
+        outcome = verify_round(
+            "verifier-fixture",
+            round_no=2,
+            runs_root=runs_root,
+            command_runner=never_called(calls),
+        )
+
+        assert calls == []
+        assert outcome.failure_reason == ""
+        assert outcome.verdict["verdict"] == "FAIL"
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_previous_was_verifier_fail_is_not_no_progress(tmp_path: Path) -> None:
+    """A verifier FAIL with all checks green says nothing about the check set."""
+
+    runs_root, worktree = prepare_run(tmp_path)
+    add_second_check(runs_root, 1)
+    set_exit(runs_root, 1, "01-hello-content", 0)
+    set_exit(runs_root, 1, "02-notes-file", 0)
+    try:
+        first = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=lambda command, cwd, timeout, stdin_text: completed(
+                fail_json(runs_root)
+            ),
+        )
+        assert first.verdict["verdict"] == "FAIL"
+
+        add_round(runs_root, 2)
+        write_run_state(runs_root, worktree, rounds=2)
+        calls: list[str] = []
+
+        outcome = verify_round(
+            "verifier-fixture",
+            round_no=2,
+            runs_root=runs_root,
+            command_runner=counting(calls, lambda: pass_json(runs_root, 2)),
+        )
+
+        assert len(calls) == 1
         assert outcome.verdict["verdict"] == "PASS"
         assert outcome.failure_reason == ""
     finally:
@@ -875,19 +1050,19 @@ def test_changed_diff_still_goes_to_verifier(tmp_path: Path) -> None:
 
 
 def test_no_progress_artifact_has_no_stale_verdict(tmp_path: Path) -> None:
+    """The round's own check evidence stays; an older verdict does not."""
+
     runs_root, worktree = prepare_run(tmp_path)
+    fail_round_one_both_checks(runs_root)
     try:
+        write_run_state(runs_root, worktree, rounds=2)
         verify_run(
             "verifier-fixture",
             runs_root=runs_root,
-            command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                pass_json(runs_root)
-            ),
+            command_runner=never_called([]),
         )
 
         target = add_round(runs_root, 2)
-        write_run_state(runs_root, worktree)
-        # Leftovers from an earlier attempt on this round.
         (target / "verdict.json").write_text(
             json.dumps(
                 {
@@ -923,12 +1098,18 @@ def test_no_progress_artifact_has_no_stale_verdict(tmp_path: Path) -> None:
 
         assert outcome.failure_reason == "no-progress"
         assert not (target / "verdict.json").exists()
-        assert not (target / "mechanical.json").exists()
+        # The stale, empty mechanical result is replaced by this round's own:
+        # it is the evidence for the claim, not a leftover.
+        fresh = json.loads((target / "mechanical.json").read_text(encoding="utf-8"))
+        assert [item["name"] for item in fresh["failed"]] == [
+            "hello-content",
+            "notes-file",
+        ]
         assert (target / "subject.json").is_file()
         state = json.loads(
             (runs_root / "verifier-fixture" / "state.json").read_text(encoding="utf-8")
         )
         assert "verdict" not in state["rounds"][1]
-        assert "mechanical" not in state["rounds"][1]
+        assert state["rounds"][1]["mechanical"]["failed"]
     finally:
         cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")

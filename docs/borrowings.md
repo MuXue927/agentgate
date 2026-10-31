@@ -18,7 +18,7 @@
 | P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；按 `git diff --name-status` 的 M/D/R 拦、A 放行；检查排在机检之前，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | `51c2c5f` |
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
-| P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：直接复用 P0-2 已写的 `subject.diff_sha256`，第 N 轮与第 N-1 轮相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，排在 protected 与机检之前，模型调用 0 次 | `fe8de2d` |
+| P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：比 **机检失败集合**（P0-1 已算、确定性、不含模型措辞），第 N(≥2) 轮与第 N-1 轮完全相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，模型调用 0 次。第一版比过 `subject.diff_sha256`，因不可达已删除 | `fix: P1-3 判据改为机检失败集合（原字节哈希判据不可达）` |
 | P1-4 | `resume --force` 先删旧档再验证新 run，失败不可恢复 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 只做原子替换（临时文件 + `os.replace`）与"先验证后删除"，不引入 SQLite | |
 | P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes/` 脚本化后端 + adapter 注入，**不加 CLI 开关**，只作测试夹具，不是产品降级链 | |
 
@@ -86,17 +86,20 @@
 - 问题：只比相邻两轮 `(where, why)` 指纹（`orchestrator.py:578`）。执行方换个
   说法描述同一件事、或把缺陷挪到另一个文件，指纹就变，循环继续烧轮次。
 - 来源：loop-engineering 用 monitor 观察 spin 并停机。
-- 独立设计：**不引入 monitor agent**——P0-2 已经把每轮冻结 diff 的 sha256 写在
-  `subject.json` 里，直接读上一轮的那个字段做等值判断，不重新算哈希（两处各算
-  一次，将来格式一改就会分裂）。判定落在 `verify_round` 内的
-  `verifier.py:793`，位置在 subject/HEAD 前向门之后、`protected`（824）与机检
-  （842）之前：diff 没变时那两道门必然复读上一轮的结论，再调验收方等于拿同一
-  份证据问第二次。命中即 `FAILED`（不是 BLOCKED，因为环境没坏），
-  `failure_reason="no-progress"`，报告以它为主因、"同缺陷连续两轮"降为附加细节。
-- 已知边界：每轮的 `diff.patch` 是相对**上一轮分支**的，所以"两轮 diff 字节相同"
-  要求两次改动从不同起点产生同一份补丁，真跑里很罕见（见
-  `docs/steps/step-11-no-progress.md` §6）。本批按维护者定义实现，不擅自改判据。
-- commit：`fe8de2d`
+- 独立设计：**不引入 monitor agent**——P0-1 每轮已经算出 `mechanical.failed`
+  （check 名集合），直接拿它与上一轮的比：第 N（≥2）轮完全相同即无净进展。
+  它不含 LLM 措辞，所以"换个说法描述同一缺陷"骗不过去；判定落在
+  `verify_round` 一处（`verifier.py:864-866`），排在 protected（839）与机检
+  （857）之后、证据包与验收方（923）之前，命中即 `FAILED`（不是 BLOCKED，因为
+  环境没坏），`failure_reason="no-progress"`，报告以它为主因、"同缺陷连续两轮"
+  降为附加细节。
+- 走过的弯路（保留为教训）：第一版比的是两轮 `subject.diff_sha256`。判据**不可达**
+  ——每轮 `diff.patch` 相对上一轮分支（`orchestrator.py:396`），而"完全没改"更早
+  就被 `NoChangesError`（`collector.py:179`）挡在收集阶段；真跑两轮哈希必然不同。
+  代码与用例已整段删除，分析见 `docs/steps/step-11-no-progress.md` §4。
+- 教训：**写检测逻辑前，先用一条真实路径证明它能被触发**。纸面成立、现实不成立
+  的分支，配上"夹具能过"的用例，比没有更误导。
+- commit：本批唯一提交（标题见上表）。
 
 ### P1-4 状态原子写
 

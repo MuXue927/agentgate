@@ -240,16 +240,13 @@ def _no_progress_lines(round_list: list[dict[str, Any]]) -> list[str]:
     detail = last.get("no_progress")
     detail = detail if isinstance(detail, dict) else {}
     previous = detail.get("previous_round", "?")
-    subject = last.get("subject")
-    digest = detail.get("diff_sha256")
-    if not digest and isinstance(subject, dict):
-        digest = subject.get("diff_sha256")
-    short = str(digest or "")[:8] or "?"
     number = last.get("round", "?")
+    checks = [str(name) for name in detail.get("failing_checks") or []]
+    listed = "、".join(checks) if checks else "（未记录）"
     lines = [
         (
-            f"无净进展：R{number} 的 diff 与 R{previous} 完全相同"
-            f"（sha256 {short}），未调用验收方。"
+            f"无净进展：R{number} 的机检失败集合与 R{previous} 完全相同"
+            f"（{listed}），未调用验收方。"
         )
     ]
     if len(round_list) >= 2:

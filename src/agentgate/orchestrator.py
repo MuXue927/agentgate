@@ -548,6 +548,11 @@ def _drive(
                 # same executor on the same tree would spin.
                 current_round["status"] = "failed"
                 current_round["failure_reason"] = failure_reason
+                if verification.no_progress is not None:
+                    # This state object is the one `_finish` saves, so the
+                    # comparison the verifier recorded has to be copied here;
+                    # otherwise the report can only say "R?".
+                    current_round["no_progress"] = verification.no_progress
                 state = _finish(
                     task,
                     run_dir,

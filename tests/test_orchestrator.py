@@ -642,3 +642,68 @@ def test_resume_force_validates_before_destroying(tmp_path: Path) -> None:
 
     assert run_dir.is_dir(), "failed resume must not destroy the old run"
     assert (run_dir / "state.json").is_file()
+
+
+def test_no_progress_detail_survives_the_orchestrator_state(
+    tmp_path: Path,
+) -> None:
+    """`ag run` keeps state in memory; the comparison must not be dropped.
+
+    The verifier writes `no_progress` to disk, then the orchestrator saves its
+    own copy over it. Without copying the detail across, report.md can only
+    say "R?" and a reader cannot tell which checks repeated.
+    """
+
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo, max_rounds=5)
+    tools = FakeRoundTools(
+        repo,
+        tmp_path / "runs",
+        verdicts=[verdict("FAIL", defect=defect())],
+    )
+
+    def verifier(task_id: str, **kwargs: object) -> VerificationOutcome:
+        round_no = int(kwargs["round_no"])
+        if round_no == 1:
+            return tools.verifier(task_id, **kwargs)
+        tools.verification_calls.append(round_no)
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=tmp_path / "runs" / task_id / f"round-{round_no}",
+            verdict=None,
+            attempts=(),
+            blocked_reason="no-progress: round 2 fails the same 1 check(s) as round 1",
+            failure_reason="no-progress",
+            no_progress={
+                "previous_round": 1,
+                "failing_checks": ["fixture-check"],
+                "previous_failing_checks": ["fixture-check"],
+            },
+        )
+
+    outcome = start_task(
+        task,
+        runs_root=tmp_path / "runs",
+        executor=tools.executor,
+        verifier=verifier,
+        usage_provider=usage,
+    )
+    run_dir = tmp_path / "runs" / "loop-fixture"
+    try:
+        rounds = outcome.state["rounds"]
+        assert outcome.state["status"] == "failed"
+        assert rounds[-1]["status"] == "failed"
+        assert rounds[-1]["failure_reason"] == "no-progress"
+        assert rounds[-1]["no_progress"]["failing_checks"] == ["fixture-check"]
+        assert "verdict" not in rounds[-1] or rounds[-1]["verdict"] is None
+
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        assert "无净进展：R2 的机检失败集合与 R1 完全相同（fixture-check）" in report
+        assert "R?" not in report
+    finally:
+        for number in (1, 2):
+            cleanup_worktree(
+                repo,
+                repo / "wt" / f"loop-fixture-r{number}",
+                f"ag/loop-fixture-r{number}",
+            )

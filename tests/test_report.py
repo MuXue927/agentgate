@@ -177,7 +177,11 @@ def test_no_progress_outranks_repeated_defect() -> None:
         "status": "failed",
         "failure_reason": "no-progress",
         "defect_fingerprints": [fingerprint],
-        "no_progress": {"previous_round": 1, "diff_sha256": "0fa355665537f27b"},
+        "no_progress": {
+            "previous_round": 1,
+            "failing_checks": ["hello-content"],
+            "previous_failing_checks": ["hello-content"],
+        },
         "subject": {
             "base_commit": "83df219",
             "head_sha": "b" * 40,
@@ -188,7 +192,7 @@ def test_no_progress_outranks_repeated_defect() -> None:
     state = {
         "status": "failed",
         "terminal_reason": (
-            "no-progress: round 2 diff is identical to round 1 (sha256 0fa35566)"
+            "no-progress: round 2 fails the same 1 check(s) as round 1 (hello-content)"
         ),
         "elapsed_seconds": 180,
         "cost_usd": 0.01,
@@ -202,7 +206,7 @@ def test_no_progress_outranks_repeated_defect() -> None:
 
     assert (
         lines[0]
-        == "无净进展：R2 的 diff 与 R1 完全相同（sha256 0fa35566），未调用验收方。"
+        == "无净进展：R2 的机检失败集合与 R1 完全相同（hello-content），未调用验收方。"
     )
     assert "相同缺陷指纹" in lines[1]
     assert "- R2: no-progress" in report

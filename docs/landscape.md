@@ -275,8 +275,12 @@ FAIL → 最终 FAIL（两侧都 PASS 才算 PASS）。这条防的是"机检通
 ### P1-3 无净进展检测
 
 - 问题：见 §2.4。
-- 做法：每轮记 `diff_sha256`；与上一轮相同 → 终态 `FAILED: no-progress`。
+- 做法：比**机检失败集合**（P0-1 每轮已算的 `mechanical.failed` 名字集合）：
+  第 N（≥2）轮与第 N-1 轮完全相同 → 终态 `FAILED: no-progress`。
   与现有"同缺陷连续两轮"并存，两者都触发时报告只写一条主因。
+- 曾计划比 `diff_sha256` 相等，**已放弃**：每轮 `diff.patch` 相对上一轮分支，
+  而"完全没改"在执行收集阶段就被 `NoChangesError` 拦成 BLOCKED，该条件不可达。
+  详见 `docs/steps/step-11-no-progress.md` §4。
 - 借鉴自：loop-engineering 的 spin 停机。一行判定，不引入 monitor agent。
 
 ### P1-4 状态写入原子化 + `resume --force` 先验后删
