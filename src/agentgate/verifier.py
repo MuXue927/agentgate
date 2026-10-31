@@ -17,6 +17,7 @@ from agentgate.collector import (
     read_changes,
     render_verifier_input,
 )
+from agentgate.evidence import EvidencePack, collect_evidence
 from agentgate.expectations import (
     MechanicalResult,
     build_mechanical_verdict,
@@ -232,30 +233,73 @@ def _write_protected(round_dir: Path, protected: ProtectedResult) -> None:
     )
 
 
+def _write_evidence(round_dir: Path, evidence: EvidencePack) -> None:
+    (round_dir / "evidence.json").write_text(
+        json.dumps(evidence.as_document(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _round_head_commit(run_dir: Path, round_no: int) -> str | None:
+    """Head commit of a round, read from the run state.
+
+    The round's own `state.json` is the collector's view and predates the
+    checkpoint commit, so the commit only exists in the run state written by
+    the orchestrator. Returning None is safe: evidence then falls back to the
+    worktree and says so in its source label.
+    """
+
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return None
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rounds = state.get("rounds")
+    if not isinstance(rounds, list):
+        return None
+    for entry in rounds:
+        if isinstance(entry, dict) and entry.get("round") == round_no:
+            head = entry.get("head_commit")
+            return str(head) if head else None
+    return None
+
+
 def _protected_gate(
     task: TaskSpec,
-    worktree: Path,
-    base_commit: str | None,
-    change_reader: ChangeReader,
+    changes: tuple[FileChange, ...],
 ) -> ProtectedResult:
     """Decide whether the executor touched a guarded path.
 
     Runs before the mechanical gate on purpose: a loosened test file still
     exits 0, so the mechanical gate would see a fully green round and hand it
     to the verifier. The cheapest place to stop that is here.
+
+    Takes the already-read change list rather than reading it again: the same
+    list feeds the evidence bundle, and two reads could disagree if the tree
+    moves between them.
     """
 
+    return evaluate_protected(task.protected, changes)
+
+
+def _read_changes(
+    worktree: Path,
+    base_commit: str | None,
+    change_reader: ChangeReader,
+) -> tuple[FileChange, ...]:
     try:
-        changes = change_reader(worktree, base_commit)
+        return change_reader(worktree, base_commit)
     except CollectorError as exc:
         # Fail closed: no evidence about the tree means no PASS.
         raise VerificationError(f"protected path check failed: {exc}") from exc
-    return evaluate_protected(task.protected, changes)
 
 
 def regenerate_verifier_input(
     task: TaskSpec,
     round_dir: Path,
+    evidence: EvidencePack | None = None,
 ) -> str:
     patch, status = _split_patch(round_dir)
     checks = _stored_checks(task, round_dir)
@@ -264,6 +308,7 @@ def regenerate_verifier_input(
         f"{patch}\n--- git status --porcelain ---\n{status}",
         status,
         checks,
+        evidence,
     )
     (round_dir / "verifier_input.md").write_text(content, encoding="utf-8")
     return content
@@ -294,6 +339,13 @@ def _prompt(
         "PASS requires every check to be PASS and defects to be empty.\n"
         "FAIL requires at least one defect object. BLOCKED may include defects.\n"
         "Every defect must include a directly executable reproduce command.\n"
+        "Judge the constraints as well as the goal. The checks only cover what "
+        "they test; a constraint is a rule about the change itself. Every "
+        "constraint the change violates gets a defect with severity "
+        '"blocking" and a where that starts with "constraint:" followed by the '
+        'rule text, exactly like: where="constraint:Do not modify anything '
+        'under docs/". Say in why what the change did that the rule forbade.\n'
+        "A satisfied goal with a violated constraint is FAIL, not PASS.\n"
         f"{retry}\n"
         "Verification input:\n"
         f"{verifier_input}"
@@ -414,7 +466,7 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         verdict.unlink()
     for stale in round_dir.glob("verifier-attempt-*"):
         stale.unlink()
-    for artifact in ("mechanical.json", "protected.json"):
+    for artifact in ("mechanical.json", "protected.json", "evidence.json"):
         path = round_dir / artifact
         if path.is_file():
             path.unlink()
@@ -570,7 +622,8 @@ def verify_round(
     # Order matters: protected paths, then the mechanical gate, then the
     # model. A loosened test file exits 0, so the mechanical gate alone would
     # wave it through.
-    protected = _protected_gate(task, worktree, base_commit, change_reader)
+    changes = _read_changes(worktree, base_commit, change_reader)
+    protected = _protected_gate(task, changes)
     _clear_previous_outcome(run_dir, round_dir)
     _write_protected(round_dir, protected)
 
@@ -591,7 +644,13 @@ def verify_round(
 
     mechanical = evaluate_checks(stored_checks)
     _write_mechanical(round_dir, mechanical)
-    verifier_input = regenerate_verifier_input(task, round_dir)
+    # Full text of what changed, from the round's commit: the diff alone
+    # cannot show that a new call site names a function that does not exist.
+    evidence = collect_evidence(
+        worktree, _round_head_commit(run_dir, round_no), changes
+    )
+    _write_evidence(round_dir, evidence)
+    verifier_input = regenerate_verifier_input(task, round_dir, evidence)
 
     if not mechanical.ok:
         # A model PASS here would be an opinion about evidence that already

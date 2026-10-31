@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentgate.doctor import DSH_CLI, DSH_EXE
+from agentgate.evidence import PER_FILE_LIMIT, TOTAL_LIMIT
 from agentgate.protected import describe_declared
 from agentgate.spec import TaskSpec, load_task, require_allowed_repo
 from agentgate.validation import ModelPair, evaluate_model_pair
@@ -30,6 +31,11 @@ class DryRunResult:
                 f"Worktree: {self.worktree.path}",
                 f"Branch: {self.worktree.branch}",
                 describe_declared(self.task.protected),
+                (
+                    f"Evidence: 每个改动文件全文，单文件上限 {PER_FILE_LIMIT // 1024} KiB"
+                    f" / 总量 {TOTAL_LIMIT // 1024} KiB；截断会在验收输入头部与"
+                    "报告里逐条列 TRUNCATED。"
+                ),
                 "",
                 "Executor command:",
                 shell_join(self.executor_command),
@@ -67,8 +73,12 @@ def _verifier_prompt(task: TaskSpec) -> str:
         "Judge the supplied artifacts, never an executor narrative.\n"
         f"Task id: {task.id}\n"
         f"Goal:\n{task.goal}\n\n"
+        "Constraints:\n"
+        f"{_bullet_lines(task.constraints)}\n\n"
         "Acceptance checks:\n"
         f"{_bullet_lines(f'{check.name}: {check.run}' for check in task.checks)}\n\n"
+        "A violated constraint is a defect; a satisfied goal with a violated "
+        "constraint is FAIL.\n"
         "Return JSON conforming to schemas/verdict.schema.json. "
         "Every defect must include a reproducible command."
     )

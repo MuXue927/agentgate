@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -152,6 +153,45 @@ def _protected_fact(round_list: list[dict[str, Any]]) -> str | None:
     if result is None:
         return None
     return result.summary_line()
+
+
+def _evidence_lines(
+    run_dir: Path,
+    round_list: list[dict[str, Any]],
+) -> list[str]:
+    """What the verifier actually saw, including what was cut.
+
+    A PASS given on a truncated bundle is a weaker claim than one given on the
+    whole tree, and the reader has to be able to tell the difference without
+    opening `verifier_input.md`.
+    """
+
+    if not round_list:
+        return []
+    round_no = round_list[-1].get("round")
+    path = run_dir / f"round-{round_no}" / "evidence.json"
+    if not path.is_file():
+        return []
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    blocks = document.get("blocks") or []
+    truncated = document.get("truncated") or []
+    skipped = document.get("skipped") or []
+    head = str(document.get("head_commit") or "")
+    source = f"commit {head[:7]}" if head else "worktree"
+    kept = sum(int(item.get("kept") or 0) for item in blocks if isinstance(item, dict))
+    facts = [
+        f"证据包：{len(blocks)} 个文件全文，共 {kept // 1024} KiB（来源 {source}）。",
+    ]
+    if skipped:
+        paths = "、".join(
+            str(item.get("path")) for item in skipped if isinstance(item, dict)
+        )
+        facts.append(f"未提供内容：{paths}。")
+    facts.extend(f"TRUNCATED: {item}" for item in truncated)
+    return ["## 验收证据", *facts, ""]
 
 
 def _conclusion(
@@ -360,6 +400,8 @@ def render_report(
         else _stored_summary(state)
     )
 
+    evidence_lines = _evidence_lines(run_dir, round_list) if run_dir is not None else []
+
     lines = [
         (
             f"# {task.id}  {status}  {_duration(float(state.get('elapsed_seconds', 0)))}"
@@ -372,6 +414,7 @@ def render_report(
         "## 每轮",
         *(_round_line(item) for item in round_list),
         "",
+        *evidence_lines,
         "## 改了哪些文件",
         "```text",
         _changed_files_text(summary),
