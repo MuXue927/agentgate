@@ -155,6 +155,30 @@ def _protected_fact(round_list: list[dict[str, Any]]) -> str | None:
     return result.summary_line()
 
 
+def _subject_fact(round_list: list[dict[str, Any]]) -> str | None:
+    """Which evidence the verdict is bound to.
+
+    Without this line a reader cannot tell a verdict about the merged tree from
+    one about a tree that has since moved; `stale-subject` only catches that
+    while verification is running.
+    """
+
+    if not round_list:
+        return None
+    verdict = round_list[-1].get("verdict")
+    if not isinstance(verdict, dict):
+        return None
+    subject = verdict.get("subject")
+    if not isinstance(subject, dict):
+        return None
+    base = str(subject.get("base_commit") or "")[:7] or "-"
+    head = str(subject.get("head_sha") or "")[:7] or "-"
+    digest = str(subject.get("diff_sha256") or "")[:8] or "-"
+    files = subject.get("changed_files")
+    count = len(files) if isinstance(files, list) else 0
+    return f"判决绑定：base {base} · head {head} · diff {digest}（{count} 个文件）。"
+
+
 def _evidence_lines(
     run_dir: Path,
     round_list: list[dict[str, Any]],
@@ -211,6 +235,9 @@ def _conclusion(
     protected = _protected_fact(round_list)
     if protected is not None:
         facts.insert(0, protected)
+    subject = _subject_fact(round_list)
+    if subject is not None:
+        facts.insert(0, subject)
     return facts
 
 

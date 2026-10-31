@@ -179,11 +179,19 @@ def verify(
         bool,
         typer.Option(
             "--force",
-            help="Re-run verification even when the run already passed.",
+            help=(
+                "Re-ask the verifier on the frozen round artifacts even when "
+                "the run already passed. Does not re-collect from the worktree."
+            ),
         ),
     ] = False,
 ) -> None:
-    """Verify an executed round once, without defect feedback or retry rounds."""
+    """Verify an executed round once, without defect feedback or retry rounds.
+
+    Works on the round's frozen diff.patch and check output. A worktree that
+    has moved since collection is reported as `stale-subject` instead of being
+    silently re-judged.
+    """
 
     try:
         outcome = verify_run(task_id, force=force)

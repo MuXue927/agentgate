@@ -32,6 +32,7 @@ from agentgate.spec import (
     validate_verdict_document,
 )
 from agentgate.status import clear_markers, set_status, write_marker
+from agentgate.subject import Subject, compute_subject, subject_mismatch
 from agentgate.validation import require_different_models
 
 
@@ -106,6 +107,25 @@ def _git_status(worktree: Path) -> str:
             + (completed.stderr.strip() or completed.stdout.strip())
         )
     return completed.stdout
+
+
+def _git_head(worktree: Path) -> str:
+    completed = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise VerificationError(
+            "git rev-parse HEAD failed: "
+            + (completed.stderr.strip() or completed.stdout.strip())
+        )
+    return completed.stdout.strip()
 
 
 def _balanced_object(text: str, start: int) -> tuple[dict[str, Any], int]:
@@ -240,6 +260,33 @@ def _write_evidence(round_dir: Path, evidence: EvidencePack) -> None:
     )
 
 
+def _write_subject(round_dir: Path, subject: Subject) -> None:
+    (round_dir / "subject.json").write_text(
+        json.dumps(subject.as_document(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _frozen_subject(
+    round_dir: Path,
+    base_commit: str | None,
+    head_sha: str,
+) -> Subject:
+    """Identity of the round as it sits on disk right now.
+
+    Recomputed rather than cached so that a caller can compare "before" and
+    "after" and catch a diff.patch that moved under the model's feet.
+    """
+
+    _, status = _split_patch(round_dir)
+    return compute_subject(
+        base_commit=base_commit,
+        head_sha=head_sha,
+        patch_path=round_dir / "diff.patch",
+        status_text=status,
+    )
+
+
 def _round_head_commit(run_dir: Path, round_no: int) -> str | None:
     """Head commit of a round, read from the run state.
 
@@ -300,6 +347,7 @@ def regenerate_verifier_input(
     task: TaskSpec,
     round_dir: Path,
     evidence: EvidencePack | None = None,
+    subject: Subject | None = None,
 ) -> str:
     patch, status = _split_patch(round_dir)
     checks = _stored_checks(task, round_dir)
@@ -309,6 +357,7 @@ def regenerate_verifier_input(
         status,
         checks,
         evidence,
+        subject,
     )
     (round_dir / "verifier_input.md").write_text(content, encoding="utf-8")
     return content
@@ -332,10 +381,14 @@ def _prompt(
         "Return only the verdict JSON object. Do not repeat or quote the schema.\n"
         "It must validate against this schema file:\n"
         f"{PROJECT_ROOT / 'schemas' / 'verdict.schema.json'}\n"
-        "Top-level keys are exactly verdict, summary, checks, defects.\n"
+        "Top-level keys are exactly verdict, summary, checks, defects, subject.\n"
         "verdict is PASS, FAIL, or BLOCKED. checks items have "
         "name, status (PASS/FAIL), evidence. defects items have "
         "id, severity, where, why, reproduce, expect, actual.\n"
+        "subject is a required object with base_commit, head_sha, diff_sha256 "
+        "and changed_files. Copy it from the verification input unchanged, "
+        "byte for byte, including every file name in changed_files. It records "
+        "which evidence you judged; do not edit, shorten, or re-derive it.\n"
         "PASS requires every check to be PASS and defects to be empty.\n"
         "FAIL requires at least one defect object. BLOCKED may include defects.\n"
         "Every defect must include a directly executable reproduce command.\n"
@@ -466,17 +519,23 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         verdict.unlink()
     for stale in round_dir.glob("verifier-attempt-*"):
         stale.unlink()
-    for artifact in ("mechanical.json", "protected.json", "evidence.json"):
+    for artifact in (
+        "mechanical.json",
+        "protected.json",
+        "evidence.json",
+        "subject.json",
+    ):
         path = round_dir / artifact
         if path.is_file():
             path.unlink()
 
 
-def _record_protected_block(
+def _record_blocked_round(
     run_dir: Path,
     round_no: int,
-    protected: ProtectedResult,
     reason: str,
+    *,
+    protected: ProtectedResult | None = None,
 ) -> None:
     """Mark the round BLOCKED in state.json without inventing a verdict."""
 
@@ -491,7 +550,8 @@ def _record_protected_block(
         if entry.get("round") == round_no:
             entry["status"] = "blocked"
             entry["blocked_reason"] = reason
-            entry["protected"] = protected.as_document()
+            if protected is not None:
+                entry["protected"] = protected.as_document()
             # A blocked round has no verdict and no mechanical result. Leaving
             # a previous PASS here (e.g. after `ag verify --force`) makes the
             # report say "R1 PASS" and "BLOCKED" at the same time.
@@ -506,6 +566,15 @@ def _record_protected_block(
         json.dumps(state, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _record_protected_block(
+    run_dir: Path,
+    round_no: int,
+    protected: ProtectedResult,
+    reason: str,
+) -> None:
+    _record_blocked_round(run_dir, round_no, reason, protected=protected)
 
 
 def _record_round_in_state(
@@ -618,6 +687,7 @@ def verify_round(
 
     stored_checks = _stored_checks(task, round_dir)
     before_status = _git_status(worktree)
+    before_head = _git_head(worktree)
     base_commit = str(state.get("base_commit") or "") or None
     # Order matters: protected paths, then the mechanical gate, then the
     # model. A loosened test file exits 0, so the mechanical gate alone would
@@ -626,6 +696,9 @@ def verify_round(
     protected = _protected_gate(task, changes)
     _clear_previous_outcome(run_dir, round_dir)
     _write_protected(round_dir, protected)
+
+    subject = _frozen_subject(round_dir, base_commit, before_head)
+    _write_subject(round_dir, subject)
 
     if not protected.ok:
         reason = protected.reason()
@@ -642,20 +715,42 @@ def verify_round(
             protected=protected,
         )
 
+    recorded_head = _round_head_commit(run_dir, round_no)
+    if recorded_head is not None and recorded_head != before_head:
+        # The frozen diff was collected against one commit. If the worktree
+        # has moved since, re-asking the model judges code nobody will merge,
+        # and answering PASS would bind the old evidence to the new tree.
+        reason = (
+            "stale-subject: worktree HEAD "
+            f"{before_head[:7]} is not the round's recorded commit "
+            f"{recorded_head[:7]}; collect the round again instead of "
+            "re-verifying frozen artifacts"
+        )
+        _record_blocked_round(run_dir, round_no, reason)
+        _mark_blocked(round_dir, reason)
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            before_status=before_status,
+            after_status=before_status,
+            protected=protected,
+        )
+
     mechanical = evaluate_checks(stored_checks)
     _write_mechanical(round_dir, mechanical)
     # Full text of what changed, from the round's commit: the diff alone
     # cannot show that a new call site names a function that does not exist.
-    evidence = collect_evidence(
-        worktree, _round_head_commit(run_dir, round_no), changes
-    )
+    evidence = collect_evidence(worktree, recorded_head, changes)
     _write_evidence(round_dir, evidence)
-    verifier_input = regenerate_verifier_input(task, round_dir, evidence)
+    verifier_input = regenerate_verifier_input(task, round_dir, evidence, subject)
 
     if not mechanical.ok:
         # A model PASS here would be an opinion about evidence that already
         # contradicts itself, so the model is not called at all.
-        verdict = build_mechanical_verdict(mechanical, stored_checks)
+        verdict = build_mechanical_verdict(mechanical, stored_checks, subject)
         (round_dir / "verdict.json").write_text(
             json.dumps(verdict, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -703,6 +798,42 @@ def verify_round(
                 before_status=before_status,
                 after_status=after_status,
             )
+        after_head = _git_head(worktree)
+        if after_head != before_head:
+            # Porcelain output alone cannot see a commit: a clean tree that
+            # gained a commit looks identical. Compare HEAD as well.
+            reason = (
+                "stale-subject: worktree HEAD moved during verification "
+                f"({before_head[:7]} -> {after_head[:7]})"
+            )
+            _mark_blocked(round_dir, reason)
+            return VerificationOutcome(
+                task_id=task_id,
+                round_dir=round_dir,
+                verdict=None,
+                attempts=tuple(attempts),
+                blocked_reason=reason,
+                before_status=before_status,
+                after_status=after_status,
+            )
+        drift = subject_mismatch(
+            subject,
+            _frozen_subject(round_dir, base_commit, before_head).as_document(),
+        )
+        if drift:
+            reason = (
+                f"stale-subject: frozen artifacts changed during verification ({drift})"
+            )
+            _mark_blocked(round_dir, reason)
+            return VerificationOutcome(
+                task_id=task_id,
+                round_dir=round_dir,
+                verdict=None,
+                attempts=tuple(attempts),
+                blocked_reason=reason,
+                before_status=before_status,
+                after_status=after_status,
+            )
         if attempt.exit_code != 0:
             reason = f"verifier exited {attempt.exit_code}: {attempt.stderr}"
             _mark_blocked(round_dir, reason)
@@ -718,13 +849,29 @@ def verify_round(
         try:
             candidate = extract_verdict_json(attempt.stdout)
             validate_verdict_document(candidate, source="verifier output")
-            verdict = candidate
-            break
         except (VerdictParseError, ValueError) as exc:
             parse_error = str(exc)
+            continue
+        echo_problem = subject_mismatch(subject, candidate.get("subject"))
+        if echo_problem:
+            # Retried rather than blocked: a small model truncating a hash is
+            # a transcription slip, and the second attempt usually copies the
+            # block correctly. Two failures in a row is a real disagreement.
+            parse_error = f"verdict.subject does not match the evidence: {echo_problem}"
+            continue
+        # Normalise the echo to the full computed object so a truncated hash
+        # never reaches verdict.json.
+        candidate["subject"] = subject.as_document()
+        verdict = candidate
+        break
 
     if verdict is None:
-        reason = f"verdict extraction failed twice: {parse_error}"
+        if parse_error.startswith("verdict.subject"):
+            # Not a parse failure: the model answered, but about something
+            # other than the evidence in front of it.
+            reason = f"subject mismatch twice: {parse_error}"
+        else:
+            reason = f"verdict extraction failed twice: {parse_error}"
         _mark_blocked(round_dir, reason)
         return VerificationOutcome(
             task_id=task_id,

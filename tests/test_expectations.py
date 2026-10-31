@@ -118,11 +118,18 @@ def completed(text: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(["codex"], 0, text, "")
 
 
-def model_verdict(verdict: str) -> str:
+def echo_subject(runs_root: Path, task_id: str) -> dict:
+    """What the verifier must copy back: written before the model is called."""
+
+    path = runs_root / task_id / "round-1" / "subject.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def model_verdict(verdict: str, subject: dict | None = None) -> str:
+    document: dict = {"verdict": verdict}
     if verdict == "PASS":
-        return json.dumps(
+        document.update(
             {
-                "verdict": "PASS",
                 "summary": "The file matches the goal.",
                 "checks": [
                     {"name": "hello-content", "status": "PASS", "evidence": "ok"}
@@ -130,24 +137,29 @@ def model_verdict(verdict: str) -> str:
                 "defects": [],
             }
         )
-    return json.dumps(
-        {
-            "verdict": "FAIL",
-            "summary": "The file content does not match.",
-            "checks": [{"name": "hello-content", "status": "FAIL", "evidence": "ok"}],
-            "defects": [
-                {
-                    "id": "D1",
-                    "severity": "blocking",
-                    "where": "hello.txt:1",
-                    "why": "Expected different content.",
-                    "reproduce": "type hello.txt",
-                    "expect": "ok2",
-                    "actual": "ok",
-                }
-            ],
-        }
-    )
+    else:
+        document.update(
+            {
+                "summary": "The file content does not match.",
+                "checks": [
+                    {"name": "hello-content", "status": "FAIL", "evidence": "ok"}
+                ],
+                "defects": [
+                    {
+                        "id": "D1",
+                        "severity": "blocking",
+                        "where": "hello.txt:1",
+                        "why": "Expected different content.",
+                        "reproduce": "type hello.txt",
+                        "expect": "ok2",
+                        "actual": "ok",
+                    }
+                ],
+            }
+        )
+    if subject is not None:
+        document["subject"] = subject
+    return json.dumps(document)
 
 
 def test_mechanical_fail_overrides_model_pass(tmp_path: Path) -> None:
@@ -192,7 +204,7 @@ def test_all_checks_pass_still_requires_model_pass(tmp_path: Path) -> None:
             task_id,
             runs_root=runs_root,
             command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                model_verdict("FAIL")
+                model_verdict("FAIL", echo_subject(runs_root, task_id))
             ),
         )
 

@@ -111,48 +111,57 @@ def completed(text: str) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(["codex"], 0, text, "")
 
 
-def pass_json() -> str:
-    return json.dumps(
-        {
-            "verdict": "PASS",
-            "summary": "The file matches the goal.",
-            "checks": [
-                {
-                    "name": "hello-content",
-                    "status": "PASS",
-                    "evidence": "ok",
-                }
-            ],
-            "defects": [],
-        }
-    )
+def echo_subject(runs_root: Path) -> dict:
+    """What the verifier must copy back: written before the model is called."""
+
+    path = runs_root / "verifier-fixture" / "round-1" / "subject.json"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
-def fail_json() -> str:
-    return json.dumps(
-        {
-            "verdict": "FAIL",
-            "summary": "The file content does not match.",
-            "checks": [
-                {
-                    "name": "hello-content",
-                    "status": "FAIL",
-                    "evidence": "ok",
-                }
-            ],
-            "defects": [
-                {
-                    "id": "D1",
-                    "severity": "blocking",
-                    "where": "hello.txt:1",
-                    "why": "Expected different content.",
-                    "reproduce": "type hello.txt",
-                    "expect": "ok2",
-                    "actual": "ok",
-                }
-            ],
-        }
-    )
+def pass_json(runs_root: Path | None = None) -> str:
+    document: dict = {
+        "verdict": "PASS",
+        "summary": "The file matches the goal.",
+        "checks": [
+            {
+                "name": "hello-content",
+                "status": "PASS",
+                "evidence": "ok",
+            }
+        ],
+        "defects": [],
+    }
+    if runs_root is not None:
+        document["subject"] = echo_subject(runs_root)
+    return json.dumps(document)
+
+
+def fail_json(runs_root: Path | None = None) -> str:
+    document: dict = {
+        "verdict": "FAIL",
+        "summary": "The file content does not match.",
+        "checks": [
+            {
+                "name": "hello-content",
+                "status": "FAIL",
+                "evidence": "ok",
+            }
+        ],
+        "defects": [
+            {
+                "id": "D1",
+                "severity": "blocking",
+                "where": "hello.txt:1",
+                "why": "Expected different content.",
+                "reproduce": "type hello.txt",
+                "expect": "ok2",
+                "actual": "ok",
+            }
+        ],
+    }
+    if runs_root is not None:
+        document["subject"] = echo_subject(runs_root)
+    return json.dumps(document)
 
 
 def test_extracts_fenced_json_with_extra_text() -> None:
@@ -203,7 +212,7 @@ def test_pass_writes_verdict_and_done(
             "verifier-fixture",
             runs_root=runs_root,
             command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                f"extra text\n```json\n{pass_json()}\n```"
+                f"extra text\n```json\n{pass_json(runs_root)}\n```"
             ),
         )
 
@@ -234,7 +243,7 @@ def test_fail_is_normal_result_and_keeps_run(
             "verifier-fixture",
             runs_root=runs_root,
             command_runner=lambda command, cwd, timeout, stdin_text: completed(
-                fail_json()
+                fail_json(runs_root)
             ),
         )
 
@@ -286,11 +295,14 @@ def test_one_invalid_then_valid_retries_once(
 ) -> None:
     runs_root, worktree = prepare_run(tmp_path)
     prompts: list[str] = []
-    outcomes = iter(("bad JSON", pass_json()))
+    # The second answer is built at call time: subject.json only exists once
+    # verification has started.
+    answers = iter(("bad JSON", "valid"))
 
     def retry(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         prompts.append(stdin_text)
-        return completed(next(outcomes))
+        answer = next(answers)
+        return completed(pass_json(runs_root) if answer == "valid" else answer)
 
     try:
         outcome = verify_run(
@@ -317,7 +329,7 @@ def test_verifier_modification_invalidates_result(
 
     def modify(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         (cwd / "verifier-dirty.txt").write_text("dirty\n", encoding="utf-8")
-        return completed(pass_json())
+        return completed(pass_json(runs_root))
 
     try:
         outcome = verify_run(
@@ -346,7 +358,7 @@ def test_verifier_command_is_readonly(
 
     def capture(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         commands.append((command, stdin_text))
-        return completed(pass_json())
+        return completed(pass_json(runs_root))
 
     try:
         verify_run(
@@ -378,7 +390,7 @@ def test_output_last_message_file_is_authoritative(
         command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str
     ):
         flag = command.index("-o")
-        Path(command[flag + 1]).write_text(pass_json(), encoding="utf-8")
+        Path(command[flag + 1]).write_text(pass_json(runs_root), encoding="utf-8")
         return subprocess.CompletedProcess(
             command,
             0,
@@ -414,7 +426,7 @@ def test_passed_run_requires_force_for_reverify(
     def passing(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         nonlocal calls
         calls += 1
-        return completed(pass_json())
+        return completed(pass_json(runs_root))
 
     try:
         first = verify_run(
@@ -470,3 +482,236 @@ def test_verify_records_verdict_in_run_state(tmp_path: Path) -> None:
     state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
     assert state["rounds"][0]["status"] == "verified_pass"
     assert state["rounds"][0]["verdict"]["verdict"] == "PASS"
+
+
+# --- P0-2: the verdict is bound to the evidence it judged ------------------
+
+
+def test_subject_json_freezes_the_evidence(tmp_path: Path) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=lambda command, cwd, timeout, stdin_text: completed(
+                pass_json(runs_root)
+            ),
+        )
+
+        subject_path = outcome.round_dir / "subject.json"
+        subject = json.loads(subject_path.read_text(encoding="utf-8"))
+        patch = (outcome.round_dir / "diff.patch").read_bytes()
+        import hashlib
+
+        assert subject["diff_sha256"] == hashlib.sha256(patch).hexdigest()
+        assert subject["changed_files"] == ["hello.txt"]
+        assert subject["head_sha"] == git(worktree, "rev-parse", "HEAD").stdout.strip()
+        assert outcome.verdict["subject"] == subject
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_verdict_without_subject_is_never_persisted(tmp_path: Path) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+    calls = 0
+
+    def forget(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        nonlocal calls
+        calls += 1
+        return completed(pass_json())
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=forget,
+        )
+
+        assert calls == 2
+        assert outcome.verdict is None
+        assert "subject" in outcome.blocked_reason
+        assert not (outcome.round_dir / "verdict.json").exists()
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_wrong_subject_is_blocked_as_mismatch_not_parse_error(
+    tmp_path: Path,
+) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+    calls = 0
+
+    def wrong(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        nonlocal calls
+        calls += 1
+        document = json.loads(pass_json(runs_root))
+        document["subject"]["head_sha"] = "0" * 40
+        return completed(json.dumps(document))
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=wrong,
+        )
+
+        assert calls == 2
+        assert outcome.verdict is None
+        assert outcome.blocked_reason.startswith("subject mismatch twice")
+        assert "head_sha" in outcome.blocked_reason
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_truncated_echo_is_accepted_and_normalised(tmp_path: Path) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+
+    def truncated(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        document = json.loads(pass_json(runs_root))
+        document["subject"]["head_sha"] = document["subject"]["head_sha"][:7]
+        document["subject"]["diff_sha256"] = document["subject"]["diff_sha256"][:12]
+        return completed(json.dumps(document))
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=truncated,
+        )
+
+        assert outcome.verdict["verdict"] == "PASS"
+        stored = json.loads(
+            (outcome.round_dir / "verdict.json").read_text(encoding="utf-8")
+        )
+        assert len(stored["subject"]["head_sha"]) == 40
+        assert len(stored["subject"]["diff_sha256"]) == 64
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_worktree_head_behind_the_round_blocks_before_the_model(
+    tmp_path: Path,
+) -> None:
+    """`--force` on a tree that moved must not re-judge the frozen diff."""
+
+    runs_root, worktree = prepare_run(tmp_path)
+    run_dir = runs_root / "verifier-fixture"
+    (run_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "rounds": [
+                    {
+                        "round": 1,
+                        "status": "executed",
+                        "head_commit": "0" * 40,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = 0
+
+    def never(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        nonlocal calls
+        calls += 1
+        return completed(pass_json(runs_root))
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=never,
+        )
+
+        assert calls == 0
+        assert outcome.verdict is None
+        assert outcome.blocked_reason.startswith("stale-subject:")
+        assert "recorded commit" in outcome.blocked_reason
+        assert (outcome.round_dir.parent / "BLOCKED").is_file()
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_head_moving_during_verification_blocks(tmp_path: Path) -> None:
+    """A clean tree that gained a commit looks unchanged to porcelain alone."""
+
+    runs_root, worktree = prepare_run(tmp_path)
+    # The orchestrator checkpoints the round before verifying; do the same so
+    # the tree starts clean and only HEAD can move.
+    git(worktree, "commit", "-m", "checkpoint")
+
+    def commit(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        git(cwd, "commit", "--allow-empty", "-m", "moved during verification")
+        return completed(pass_json(runs_root))
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=commit,
+        )
+
+        assert outcome.verdict is None
+        assert "HEAD moved during verification" in outcome.blocked_reason
+        assert outcome.before_status == outcome.after_status
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_frozen_patch_changing_during_verification_blocks(
+    tmp_path: Path,
+) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+
+    def tamper(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        patch = runs_root / "verifier-fixture" / "round-1" / "diff.patch"
+        patch.write_text(
+            patch.read_text(encoding="utf-8") + "\n# tampered\n",
+            encoding="utf-8",
+        )
+        return completed(pass_json(runs_root))
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=tamper,
+        )
+
+        assert outcome.verdict is None
+        assert "frozen artifacts changed during verification" in outcome.blocked_reason
+        assert "diff_sha256" in outcome.blocked_reason
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")
+
+
+def test_mechanical_verdict_carries_the_subject_too(tmp_path: Path) -> None:
+    runs_root, worktree = prepare_run(tmp_path)
+    exit_file = (
+        runs_root
+        / "verifier-fixture"
+        / "round-1"
+        / "artifacts"
+        / "01-hello-content.exit.txt"
+    )
+    exit_file.write_text("1\n", encoding="utf-8")
+
+    def never(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
+        raise AssertionError("the model must not be called for a mechanical failure")
+
+    try:
+        outcome = verify_run(
+            "verifier-fixture",
+            runs_root=runs_root,
+            command_runner=never,
+        )
+
+        subject = json.loads(
+            (outcome.round_dir / "subject.json").read_text(encoding="utf-8")
+        )
+        assert outcome.verdict["verdict"] == "FAIL"
+        assert outcome.verdict["subject"] == subject
+        assert outcome.verdict["defects"][0]["where"].startswith("mechanical:")
+    finally:
+        cleanup_worktree(tmp_path / "target", worktree, "ag/verifier-fixture-r1")

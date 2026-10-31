@@ -4,13 +4,39 @@
   "title": "AgentGate verifier verdict",
   "type": "object",
   "additionalProperties": false,
-  "required": ["verdict", "summary", "checks", "defects"],
+  "required": ["verdict", "summary", "checks", "defects", "subject"],
   "properties": {
     "verdict": {
       "enum": ["PASS", "FAIL", "BLOCKED"]
     },
     "summary": {
       "type": "string"
+    },
+    "subject": {
+      "description": "The frozen evidence this verdict is about, copied from the verification input unchanged.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_commit", "head_sha", "diff_sha256", "changed_files"],
+      "properties": {
+        "base_commit": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": "string",
+          "minLength": 7
+        },
+        "diff_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,64}$"
+        },
+        "changed_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     },
     "checks": {
       "type": "array",

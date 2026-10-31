@@ -148,15 +148,23 @@ def prepare(tmp_path: Path, *, protected: tuple[str, ...] | None = GUARDED) -> F
     )
 
 
-def model_pass() -> str:
+def model_pass(fixture: Fixture) -> str:
     return json.dumps(
         {
             "verdict": "PASS",
             "summary": "The file matches the goal.",
             "checks": [{"name": "hello-content", "status": "PASS", "evidence": "ok"}],
             "defects": [],
+            "subject": echo_subject(fixture),
         }
     )
+
+
+def echo_subject(fixture: Fixture) -> dict:
+    """What the verifier must copy back: written before the model is called."""
+
+    path = fixture.round_dir / "subject.json"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def run_verify(fixture: Fixture, *, calls: list[tuple[str, ...]] | None = None):
@@ -164,7 +172,7 @@ def run_verify(fixture: Fixture, *, calls: list[tuple[str, ...]] | None = None):
 
     def runner(command: tuple[str, ...], cwd: Path, timeout: float, stdin_text: str):
         recorded.append(command)
-        return subprocess.CompletedProcess(command, 0, model_pass(), "")
+        return subprocess.CompletedProcess(command, 0, model_pass(fixture), "")
 
     outcome = verify_run(
         fixture.task_id,
@@ -254,7 +262,7 @@ def test_protected_absent_prints_none_declared(tmp_path: Path) -> None:
             {
                 "round": 1,
                 "status": "verified_pass",
-                "verdict": json.loads(model_pass()),
+                "verdict": json.loads(model_pass(fixture)),
                 "protected": outcome.protected.as_document(),
             }
         ],

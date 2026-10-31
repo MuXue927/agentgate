@@ -14,6 +14,7 @@ from agentgate.proc import run_bounded
 from agentgate.protected import FileChange, parse_name_status
 from agentgate.spec import CheckSpec, TaskSpec
 from agentgate.status import write_marker
+from agentgate.subject import Subject
 from agentgate.validation import ModelPair
 from agentgate.workspace import Worktree
 
@@ -214,13 +215,16 @@ def render_verifier_input(
     status: str,
     checks: tuple[CheckOutput, ...],
     evidence: EvidencePack | None = None,
+    subject: Subject | None = None,
 ) -> str:
     """Assemble the verifier's dossier.
 
     Section order is load-bearing: the rules (goal, constraints) come before
     the change, so a constraint cannot be "discovered" only after reading the
     diff that violates it. File contents come last, after the mechanical
-    evidence, because they are reference material rather than a claim.
+    evidence, because they are reference material rather than a claim. The
+    subject comes first of all, because every line below it is evidence *about*
+    that subject.
     """
 
     check_lines = "\n".join(
@@ -248,6 +252,20 @@ def render_verifier_input(
         truncations = evidence.truncation_lines()
         if truncations:
             header.extend([*truncations, ""])
+    subject_block: list[str] = []
+    if subject is not None:
+        subject_block = [
+            "## Subject",
+            "",
+            "This object identifies the exact evidence shown below. Copy it into",
+            "your verdict's subject field unchanged.",
+            "",
+            _fenced(
+                json.dumps(subject.as_document(), ensure_ascii=False, indent=2),
+                "json",
+            ),
+            "",
+        ]
     body = [
         "## Goal",
         task.goal,
@@ -268,7 +286,7 @@ def render_verifier_input(
     if evidence is not None:
         body.extend(_render_evidence(evidence))
     body.extend(("## Changed file list", _fenced(status), ""))
-    return "\n".join(header + body)
+    return "\n".join(header + subject_block + body)
 
 
 def _render_evidence(evidence: EvidencePack) -> list[str]:

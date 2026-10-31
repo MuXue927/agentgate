@@ -20,6 +20,7 @@ from typing import Any
 
 from agentgate.collector import CheckOutput
 from agentgate.spec import CheckSpec
+from agentgate.subject import Subject
 
 _TAIL_CHARS = 400
 
@@ -136,10 +137,13 @@ def evaluate_checks(checks: Iterable[CheckOutput]) -> MechanicalResult:
 def build_mechanical_verdict(
     result: MechanicalResult,
     checks: Iterable[CheckOutput],
+    subject: Subject,
 ) -> dict[str, Any]:
     """Build a verdict document from mechanical failures only.
 
-    The shape matches `schemas/verdict.schema.json`; no schema change is needed.
+    The shape matches `schemas/verdict.schema.json`, subject included: a
+    mechanical FAIL is still a verdict about a specific frozen round, and the
+    report binds it the same way it binds a model verdict.
     `where` carries the `mechanical:` prefix so a report can never confuse this
     with a model-authored defect.
     """
@@ -176,4 +180,5 @@ def build_mechanical_verdict(
         "summary": f"mechanical checks failed: {names}",
         "checks": check_docs,
         "defects": defects,
+        "subject": subject.as_document(),
     }
