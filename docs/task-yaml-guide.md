@@ -328,6 +328,38 @@ protected:
 
 ---
 
+### 1.10 `subject` —— 你不用写，但报告里会看到
+
+从 v0.2 起，每份判决都绑定一份证据身份，由程序算、验收方原样回抄，`task.yaml`
+里没有对应字段。
+
+| 字段 | 是什么 |
+|---|---|
+| `base_commit` | 这一轮的起点 commit |
+| `head_sha` | 验收开始时 worktree 的 HEAD（即 checkpoint commit） |
+| `diff_sha256` | 冻结的 `diff.patch` 的字节哈希 |
+| `changed_files` | 这一轮改了哪些文件 |
+
+报告结论段第一行会写：
+
+```text
+判决绑定：base 83df219 · head b20a7e4 · diff 0fa35566（1 个文件）。
+```
+
+**它挡住的两件事**：
+
+1. `ag verify --force` 只重问**冻结证据**，不重新收集。所以你在验收后往 worktree
+   里提交了东西，再 `--force` 会得到
+   `BLOCKED: stale-subject: worktree HEAD … is not the round's recorded commit …`，
+   而不是一个针对旧 diff 的 PASS。要重验现状，请重新跑轮次。
+2. 验收过程中有人改了 `diff.patch` 或提交了一个 commit，也会被同一类
+   `stale-subject` 拒绝（`git status` 干净也躲不过，因为现在比的是 HEAD 哈希）。
+
+看到 `stale-subject` 时**不要**去改 commit 让它对上——那相当于伪造身份。正确做法是
+重新收集这一轮。
+
+---
+
 ## 2. `agentgate-docs.task.yaml` 逐段解析
 
 这是第一次真实跑通的任务。逐段看它为什么这样写。
