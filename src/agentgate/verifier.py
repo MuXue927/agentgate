@@ -61,7 +61,11 @@ class VerificationOutcome:
     round_dir: Path
     verdict: dict[str, Any] | None
     attempts: tuple[AttemptResult, ...]
+    # Carries the human sentence for any non-verdict ending. `failure_reason`
+    # decides which one it is: empty means BLOCKED (the run stopped for an
+    # environmental reason), "no-progress" means FAILED (a real outcome).
     blocked_reason: str = ""
+    failure_reason: str = ""
     before_status: str = ""
     after_status: str = ""
     mechanical: MechanicalResult | None = None
@@ -577,6 +581,71 @@ def _record_protected_block(
     _record_blocked_round(run_dir, round_no, reason, protected=protected)
 
 
+def _previous_diff_sha(run_dir: Path, round_no: int) -> str:
+    """`diff_sha256` of the round before this one, read from its subject.
+
+    Reuses the field P0-2 already wrote instead of hashing `diff.patch` again:
+    two independent hashes would eventually disagree, and then the subject
+    would say one thing and the no-progress check another. Runs recorded before
+    the subject existed have nothing to compare against, so they are never
+    judged as no-progress.
+    """
+
+    if round_no < 2:
+        return ""
+    path = run_dir / f"round-{round_no - 1}" / "subject.json"
+    if not path.is_file():
+        return ""
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    value = document.get("diff_sha256") if isinstance(document, dict) else None
+    return str(value) if isinstance(value, str) else ""
+
+
+def _record_no_progress(
+    run_dir: Path,
+    round_no: int,
+    reason: str,
+    *,
+    previous_round: int,
+    subject: Subject,
+) -> None:
+    """Record a FAILED round: same diff as last time, nobody asked to judge it."""
+
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for entry in state.get("rounds", []):
+        if entry.get("round") == round_no:
+            entry["status"] = "failed"
+            entry["failure_reason"] = "no-progress"
+            entry["no_progress"] = {
+                "previous_round": previous_round,
+                "diff_sha256": subject.diff_sha256,
+            }
+            # The subject is what proves the claim, so it stays. A verdict or
+            # mechanical result from an earlier `--force` would contradict the
+            # round's own status, so those go.
+            entry["subject"] = subject.as_document()
+            for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
+                entry.pop(stale_key, None)
+            break
+    else:
+        return
+    state["terminal_reason"] = reason
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _record_round_in_state(
     run_dir: Path,
     round_no: int,
@@ -693,27 +762,10 @@ def verify_round(
     # model. A loosened test file exits 0, so the mechanical gate alone would
     # wave it through.
     changes = _read_changes(worktree, base_commit, change_reader)
-    protected = _protected_gate(task, changes)
     _clear_previous_outcome(run_dir, round_dir)
-    _write_protected(round_dir, protected)
 
     subject = _frozen_subject(round_dir, base_commit, before_head)
     _write_subject(round_dir, subject)
-
-    if not protected.ok:
-        reason = protected.reason()
-        _record_protected_block(run_dir, round_no, protected, reason)
-        _mark_blocked(round_dir, reason)
-        return VerificationOutcome(
-            task_id=task_id,
-            round_dir=round_dir,
-            verdict=None,
-            attempts=(),
-            blocked_reason=reason,
-            before_status=before_status,
-            after_status=before_status,
-            protected=protected,
-        )
 
     recorded_head = _round_head_commit(run_dir, round_no)
     if recorded_head is not None and recorded_head != before_head:
@@ -727,6 +779,54 @@ def verify_round(
             "re-verifying frozen artifacts"
         )
         _record_blocked_round(run_dir, round_no, reason)
+        _mark_blocked(round_dir, reason)
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            before_status=before_status,
+            after_status=before_status,
+        )
+
+    previous_sha = _previous_diff_sha(run_dir, round_no)
+    if previous_sha and previous_sha == subject.diff_sha256:
+        # Order is deliberate: the diff is byte-identical to last round, so
+        # protected and the mechanical gate would repeat their previous answer,
+        # and asking the model again would be asking it about the same evidence
+        # a second time. This is a real FAILED ending, not a BLOCKED one.
+        reason = (
+            "no-progress: round "
+            f"{round_no} diff is identical to round {round_no - 1} "
+            f"(sha256 {subject.diff_sha256[:8]})"
+        )
+        _record_no_progress(
+            run_dir,
+            round_no,
+            reason,
+            previous_round=round_no - 1,
+            subject=subject,
+        )
+        write_marker(run_dir, "FAILED", reason)
+        set_status(run_dir, "failed")
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=round_dir,
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            failure_reason="no-progress",
+            before_status=before_status,
+            after_status=before_status,
+        )
+
+    protected = _protected_gate(task, changes)
+    _write_protected(round_dir, protected)
+
+    if not protected.ok:
+        reason = protected.reason()
+        _record_protected_block(run_dir, round_no, protected, reason)
         _mark_blocked(round_dir, reason)
         return VerificationOutcome(
             task_id=task_id,

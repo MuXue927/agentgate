@@ -49,6 +49,9 @@ def _cost_text(state: dict[str, Any]) -> str:
 
 def _round_line(round_state: dict[str, Any]) -> str:
     number = round_state["round"]
+    failure = str(round_state.get("failure_reason") or "")
+    if failure:
+        return f"- R{number}: {failure}"
     verdict = round_state.get("verdict")
     if not isinstance(verdict, dict):
         return f"- R{number}: {round_state.get('status', 'unknown')}"
@@ -64,6 +67,8 @@ def _round_line(round_state: dict[str, Any]) -> str:
 
 def _round_fact(round_state: dict[str, Any]) -> str:
     number = round_state.get("round", "?")
+    if str(round_state.get("failure_reason") or "") == "no-progress":
+        return f"R{number} 无净进展"
     verdict = round_state.get("verdict")
     if not isinstance(verdict, dict):
         status = str(round_state.get("status", "unknown")).lower()
@@ -218,6 +223,47 @@ def _evidence_lines(
     return ["## 验收证据", *facts, ""]
 
 
+def _no_progress_lines(round_list: list[dict[str, Any]]) -> list[str]:
+    """Why the run stopped, when it stopped for producing nothing new.
+
+    One main cause, then at most one detail line. A round can also match the
+    "same defect twice" rule, but that rule needs a verdict this round never
+    got, so when both markers are present no-progress owns the headline and the
+    overlap is reported as a secondary note.
+    """
+
+    if not round_list:
+        return []
+    last = round_list[-1]
+    if str(last.get("failure_reason") or "") != "no-progress":
+        return []
+    detail = last.get("no_progress")
+    detail = detail if isinstance(detail, dict) else {}
+    previous = detail.get("previous_round", "?")
+    subject = last.get("subject")
+    digest = detail.get("diff_sha256")
+    if not digest and isinstance(subject, dict):
+        digest = subject.get("diff_sha256")
+    short = str(digest or "")[:8] or "?"
+    number = last.get("round", "?")
+    lines = [
+        (
+            f"无净进展：R{number} 的 diff 与 R{previous} 完全相同"
+            f"（sha256 {short}），未调用验收方。"
+        )
+    ]
+    if len(round_list) >= 2:
+        current = set(last.get("defect_fingerprints") or [])
+        earlier = set(round_list[-2].get("defect_fingerprints") or [])
+        repeated = sorted(current & earlier)
+        if repeated:
+            lines.append(
+                f"附加：与 R{round_list[-2].get('round', '?')} 存在相同缺陷指纹"
+                f"（{repeated[0]}），但这不改变主因。"
+            )
+    return lines
+
+
 def _conclusion(
     state: dict[str, Any],
     summary: ChangeSummary | None,
@@ -238,7 +284,7 @@ def _conclusion(
     subject = _subject_fact(round_list)
     if subject is not None:
         facts.insert(0, subject)
-    return facts
+    return [*_no_progress_lines(round_list), *facts]
 
 
 def _parse_numstat(output: str, statuses: dict[str, str]) -> ChangeSummary:

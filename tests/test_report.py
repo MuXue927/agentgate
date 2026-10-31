@@ -164,3 +164,46 @@ def test_blocked_conclusion_snapshot_is_actionable() -> None:
         "暂不合并；阻塞原因：verdict extraction failed twice。",
     ]
     assert "The run stopped before convergence" not in report
+
+
+def test_no_progress_outranks_repeated_defect() -> None:
+    """One headline, one optional detail -- never two competing root causes."""
+
+    fingerprint = "where=hello.txt:1|why=mismatch"
+    first = round_state(1, kind="FAIL", defects=[defect()])
+    first["defect_fingerprints"] = [fingerprint]
+    second = {
+        "round": 2,
+        "status": "failed",
+        "failure_reason": "no-progress",
+        "defect_fingerprints": [fingerprint],
+        "no_progress": {"previous_round": 1, "diff_sha256": "0fa355665537f27b"},
+        "subject": {
+            "base_commit": "83df219",
+            "head_sha": "b" * 40,
+            "diff_sha256": "0fa355665537f27b",
+            "changed_files": ["hello.txt"],
+        },
+    }
+    state = {
+        "status": "failed",
+        "terminal_reason": (
+            "no-progress: round 2 diff is identical to round 1 (sha256 0fa35566)"
+        ),
+        "elapsed_seconds": 180,
+        "cost_usd": 0.01,
+        "tier": "★★",
+        "rounds": [first, second],
+        "change_summary": summary("hello.txt", 1),
+    }
+
+    report = render_report(TASK, state, repo=ROOT)
+    lines = conclusion(report)
+
+    assert (
+        lines[0]
+        == "无净进展：R2 的 diff 与 R1 完全相同（sha256 0fa35566），未调用验收方。"
+    )
+    assert "相同缺陷指纹" in lines[1]
+    assert "- R2: no-progress" in report
+    assert report.index("无净进展") < report.index("相同缺陷指纹")

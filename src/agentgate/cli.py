@@ -202,6 +202,11 @@ def verify(
         protected = getattr(outcome, "protected", None)
         if protected is not None:
             typer.echo(protected.summary_line(), err=True)
+        failure = getattr(outcome, "failure_reason", "")
+        if failure:
+            # A real ending, not an environment problem: exit 1, not 2.
+            typer.echo(f"FAILED: {failure} — {outcome.blocked_reason}", err=True)
+            raise typer.Exit(code=1)
         typer.echo(f"BLOCKED: {outcome.blocked_reason}", err=True)
         raise typer.Exit(code=2)
 

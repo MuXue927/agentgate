@@ -109,6 +109,20 @@ class TestCli:
         assert result.exit_code == 2
         assert "BLOCKED: verdict extraction failed twice" in result.output
 
+    def test_verify_no_progress_is_exit_one(self) -> None:
+        """A round that produced nothing new failed; it did not get blocked."""
+
+        outcome = SimpleNamespace(
+            verdict=None,
+            blocked_reason="no-progress: round 2 diff is identical to round 1",
+            failure_reason="no-progress",
+        )
+        with patch("agentgate.cli.verify_run", return_value=outcome):
+            result = CliRunner().invoke(app, ["verify", "fixture"])
+
+        assert result.exit_code == 1
+        assert "FAILED: no-progress" in result.output
+
     def test_report_route_uses_existing_state(self) -> None:
         state = {"status": "done", "rounds": []}
         run_dir = PROJECT_ROOT / "runs" / "fixture"

@@ -541,6 +541,23 @@ def _drive(
 
         if verification.verdict is None:
             reason = verification.blocked_reason or "verification returned BLOCKED"
+            failure_reason = getattr(verification, "failure_reason", "")
+            if failure_reason:
+                # A real ending: the round produced nothing new to judge. Not
+                # BLOCKED -- nothing environmental went wrong, and retrying the
+                # same executor on the same tree would spin.
+                current_round["status"] = "failed"
+                current_round["failure_reason"] = failure_reason
+                state = _finish(
+                    task,
+                    run_dir,
+                    state,
+                    "failed",
+                    reason=reason,
+                    usage_provider=usage_provider,
+                )
+                push(f"Round {round_no}: {failure_reason} → FAILED")
+                break
             # The round did not end in "executed, waiting for verification" --
             # it ended blocked, and the report should say so.
             current_round["status"] = "blocked"
