@@ -14,11 +14,11 @@
 | 编号 | 问题 | 来源（链接 + 一句话） | 我们的独立设计差异 | commit |
 |---|---|---|---|---|
 | P0-1 | `expect` 只进提示词，真实 exit code 从未被代码比对 | [loope](https://github.com/mateaix/loope) `--verify-cmd` 退出码硬门；[agent-loops](https://github.com/andromarces/agent-loops) 运行时在评审沙箱外跑测试 | 新增纯函数逐键判定 `expect`；失败时不调验收模型，直接由机检结果合成缺陷并进入回灌；`where` 加 `mechanical:` 前缀 | 0250082 |
-| P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | |
+| P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | `83df219` |
 | P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；按 `git diff --name-status` 的 M/D/R 拦、A 放行；检查排在机检之前，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | `51c2c5f` |
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
-| P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 每轮记 `diff_sha256`，与上一轮相同即 `FAILED: no-progress`；不引入 monitor agent | |
+| P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：直接复用 P0-2 已写的 `subject.diff_sha256`，第 N 轮与第 N-1 轮相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，排在 protected 与机检之前，模型调用 0 次 | `fe8de2d` |
 | P1-4 | `resume --force` 先删旧档再验证新 run，失败不可恢复 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 只做原子替换（临时文件 + `os.replace`）与"先验证后删除"，不引入 SQLite | |
 | P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes/` 脚本化后端 + adapter 注入，**不加 CLI 开关**，只作测试夹具，不是产品降级链 | |
 
@@ -45,7 +45,7 @@
 - 来源：claude-kit 的 digest 绑定、review-loop 的 revision 绑定。
 - 独立设计：`subject.json` 由 collector 生成，字段用我们已有的 `base_commit`
   词汇；比对在 `verify` 收尾处做，失败即终态，不重试。
-- commit：（待填）
+- commit：`83df219`
 
 ### P0-3 受保护路径
 
@@ -83,10 +83,20 @@
 
 ### P1-3 无净进展
 
-- 问题：只比相邻两轮 `(where, why)` 指纹（`orchestrator.py:575`）。
-- 来源：loop-engineering 的 spin 停机。
-- 独立设计：`diff_sha256` 相等即 FAILED，一行判定，不加 agent。
-- commit：（待填）
+- 问题：只比相邻两轮 `(where, why)` 指纹（`orchestrator.py:578`）。执行方换个
+  说法描述同一件事、或把缺陷挪到另一个文件，指纹就变，循环继续烧轮次。
+- 来源：loop-engineering 用 monitor 观察 spin 并停机。
+- 独立设计：**不引入 monitor agent**——P0-2 已经把每轮冻结 diff 的 sha256 写在
+  `subject.json` 里，直接读上一轮的那个字段做等值判断，不重新算哈希（两处各算
+  一次，将来格式一改就会分裂）。判定落在 `verify_round` 内的
+  `verifier.py:793`，位置在 subject/HEAD 前向门之后、`protected`（824）与机检
+  （842）之前：diff 没变时那两道门必然复读上一轮的结论，再调验收方等于拿同一
+  份证据问第二次。命中即 `FAILED`（不是 BLOCKED，因为环境没坏），
+  `failure_reason="no-progress"`，报告以它为主因、"同缺陷连续两轮"降为附加细节。
+- 已知边界：每轮的 `diff.patch` 是相对**上一轮分支**的，所以"两轮 diff 字节相同"
+  要求两次改动从不同起点产生同一份补丁，真跑里很罕见（见
+  `docs/steps/step-11-no-progress.md` §6）。本批按维护者定义实现，不擅自改判据。
+- commit：`fe8de2d`
 
 ### P1-4 状态原子写
 
