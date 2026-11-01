@@ -97,6 +97,7 @@ uv run ag clean hello-first           # 清理 worktree 与分支
 | 每条 check 的 `name` | ✅ | ✅ | 只是标签 |
 | 每条 check 的 `run` | ✅ 命令原文 | ✅ 命令原文 | 所以**关键信息要写进命令里** |
 | 每条 check 的 `expect` | ❌ | ✅ | 执行方不知道期望值 |
+| `holdout_checks`（若声明） | ❌ | ❌ | 留出判据：名称与命令都不出现，失败即终态 |
 | `budget` | ❌ | ❌ | 只影响编排器 |
 | 上一轮的 defects | ✅ 第 2 轮起 | — | 回灌时给全文 |
 
@@ -110,10 +111,10 @@ uv run ag clean hello-first           # 清理 worktree 与分支
 
 ---
 
-## 1. 九个必填字段 + 一个可选字段
+## 1. 九个必填字段 + 两个可选字段
 
 `id / repo / goal / executor / verifier / constraints / checks / budget / human_approval` 全部必填，没有静默默认值。
-`protected` 可选；不写就是不设保护，报告会打印 `PROTECTED: none declared`，不会静默。
+`protected` 与 `holdout_checks` 可选；不写就是不设保护 / 没有留出判据，报告不会静默隐瞒。
 
 ### 1.1 `id`
 
@@ -320,8 +321,8 @@ protected:
 `assert x == 3` 改成 `assert True`，`pytest` 照样退出 0，机检全绿。
 只有"这个文件被改过"这件事，机检看不出来，`protected` 才能。
 
-**顺序**：`collect → protected → 机检 → 验收方`。受保护检查必须排在机检之前，
-否则"改松测试 → 机检全绿 → 验收官看到一片绿"就绕过去了。
+**顺序**：`collect → protected → 机检 → 留出判据 → 无净进展 → 证据包 → 验收方`。
+受保护检查必须排在机检之前，否则"改松测试 → 机检全绿 → 验收官看到一片绿"就绕过去了。
 
 **别套太死**：`tests/**` 挡住的是"改/删既有测试"。如果任务本身就要改某条旧测试，
 要么别写这条 glob，要么把 glob 收窄到具体文件（如 `tests/test_contract.py`）。
@@ -357,6 +358,44 @@ protected:
 
 看到 `stale-subject` 时**不要**去改 commit 让它对上——那相当于伪造身份。正确做法是
 重新收集这一轮。
+
+---
+
+### 1.11 `holdout_checks`（可选）—— 留出判据
+
+```yaml
+holdout_checks:
+  - name: hidden-empty-input
+    run: python -c "import pathlib,sys; sys.exit(0 if pathlib.Path('a.txt').read_text().strip() else 1)"
+    expect: {exit: 0}
+```
+
+结构同 `checks`，**1–3 条**（schema 强制）。用来发现"照着清单写代码"：执行方只看得到
+`checks`，看不到这一组。
+
+| 特性 | 行为 |
+|---|---|
+| 进执行提示词？ | **否**。名称与 `run` 都不出现 |
+| `--dry-run` | 只打印一行 `HOLDOUT: 2 checks (not shown)` |
+| 什么时候跑 | 公开 `checks` **全绿之后**；公开有失败就完全不跑 |
+| 失败结果 | 终态 `FAILED: holdout-failed`，不调验收方、不生成 defect、不进下一轮 |
+| 报告里出现什么 | 只有序号与输出尾部：`留出判据未通过：#2（输出尾部 "AssertionError: …"），未调用验收方。` |
+| 完整命令落在哪 | 本轮目录的 `holdout.json`（本地工件，人可查，不喂模型） |
+
+**为什么不回灌**：defect 的 `reproduce` 必须是**可直接执行**的命令。把留出判据填进去，
+等于从第二轮起把它交到执行方手上——留出判据当场失效。所以它一次就判终态。
+
+**必须知道的风险（重要）**：`task.yaml` 若放在目标仓库里，执行方在 worktree 里就能
+直接读到它，留出判据当场失效。**含 `holdout_checks` 的任务文件必须放在仓库外**
+（如 `D:/Projects/ag-tasks/`，与 `tasks/README.md` 的约定一致）。`runs/<id>/task.yaml`
+快照虽然在仓库内，但 `runs/` 不在 worktree 里，执行方读不到。
+
+**写留出判据的两条准则**：
+
+1. 判据要能从公开目标推出来（"输入为空时应该报错"），否则它考的是猜谜，不是过拟合。
+2. 只读、确定、快——和 `checks` 同一套要求，它跑在同一个 worktree 里。
+
+留出判据**不参与**"无净进展"比较：它失败即终态，不产生第二轮，也就没有可比的基线。
 
 ---
 
@@ -562,6 +601,7 @@ checks:
 | `BLOCKED: verifier exited 1: 输入行太长` | prompt 超 Windows argv 上限 | 已修（改走 stdin） |
 | `FAILED` + 同一 fingerprint | 同一缺陷连续两轮未消除 | 改 goal/checks 或 constraints，而不是加轮次 |
 | `FAILED` + `max_rounds exhausted` | 轮次用完仍不过 | 看最后一轮 defects，多半是 goal 与 checks 不一致 |
+| `FAILED` + `holdout-failed` | 留出判据没通过（公开判据当时是全绿的） | 看本轮 `holdout.json` 的 `run` 与输出；这通常意味着代码只满足了公开清单 |
 | `SpecError: repo points to AgentGate itself` | 忘了 `--allow-self` | 加参数 |
 | `ModelPairError: 同一模型族` | 执行与验收同族 | 换非 DeepSeek 验收模型 |
 | `Run already exists` | 同 id 已有 run | 合并后 `ag clean <id>`，或换 id |

@@ -68,6 +68,11 @@ class TaskSpec:
     #: Empty means "none declared": nothing is guarded, and the report says so
     #: instead of pretending the run was protected.
     protected: tuple[str, ...] = ()
+    #: Checks the executor is never shown. Same contract as `checks`, but they
+    #: are absent from every model-facing rendering; a failure here is terminal
+    #: and is never fed back as a defect (its `reproduce` would hand the check
+    #: to the executor). Empty means "none declared".
+    holdout_checks: tuple[CheckSpec, ...] = ()
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -126,6 +131,30 @@ def validate_document(
     )
 
 
+def _parse_checks(items: list[Any], *, field: str) -> list[CheckSpec]:
+    names: set[str] = set()
+    parsed: list[CheckSpec] = []
+    for index, item in enumerate(items):
+        name = item["name"]
+        if name in names:
+            raise SpecError(
+                f"Invalid task.yaml:\n- {field}[{index}].name: duplicate {name!r}"
+            )
+        names.add(name)
+        regex = item["expect"].get("stdout_regex")
+        if regex is not None:
+            try:
+                re.compile(regex)
+            except re.error as exc:
+                raise SpecError(
+                    f"Invalid task.yaml:\n- {field}[{index}].expect.stdout_regex: {exc}"
+                ) from exc
+        parsed.append(
+            CheckSpec(name=name, run=item["run"], expect=dict(item["expect"]))
+        )
+    return parsed
+
+
 def load_task(path: Path) -> TaskSpec:
     path = path.expanduser().resolve()
     try:
@@ -141,26 +170,13 @@ def load_task(path: Path) -> TaskSpec:
 
     validate_document(document, TASK_SCHEMA_PATH, source=f"task.yaml: {path}")
 
-    check_names: set[str] = set()
-    checks: list[CheckSpec] = []
-    for index, item in enumerate(document["checks"]):
-        name = item["name"]
-        if name in check_names:
-            raise SpecError(
-                f"Invalid task.yaml:\n- checks[{index}].name: duplicate {name!r}"
-            )
-        check_names.add(name)
-        regex = item["expect"].get("stdout_regex")
-        if regex is not None:
-            try:
-                re.compile(regex)
-            except re.error as exc:
-                raise SpecError(
-                    f"Invalid task.yaml:\n- checks[{index}].expect.stdout_regex: {exc}"
-                ) from exc
-        checks.append(
-            CheckSpec(name=name, run=item["run"], expect=dict(item["expect"]))
-        )
+    checks = _parse_checks(document["checks"], field="checks")
+    # `holdout_checks` is optional; absent and empty are the same thing, so an
+    # empty list is refused by the schema rather than silently meaning "none".
+    holdout_checks = _parse_checks(
+        document.get("holdout_checks") or [],
+        field="holdout_checks",
+    )
 
     budget = BudgetSpec(
         max_rounds=document["budget"]["max_rounds"],
@@ -200,6 +216,7 @@ def load_task(path: Path) -> TaskSpec:
         before_execute=document["human_approval"]["before_execute"],
         before_merge=document["human_approval"]["before_merge"],
         protected=tuple(document.get("protected") or ()),
+        holdout_checks=tuple(holdout_checks),
     )
 
 

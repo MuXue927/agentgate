@@ -66,10 +66,21 @@ def check_slug(name: str) -> str:
     return normalized or "check"
 
 
-def run_checks(task: TaskSpec, worktree: Path) -> tuple[CheckOutput, ...]:
+def run_spec_checks(
+    checks: tuple[CheckSpec, ...],
+    worktree: Path,
+    *,
+    timeout_s: float,
+) -> tuple[CheckOutput, ...]:
+    """Run one declared list of checks in the worktree.
+
+    Shared by the public checks (collected with the round) and the held-out
+    checks (run at verification time), so a held-out check is judged by exactly
+    the same execution and timeout rules as a public one.
+    """
+
     outputs: list[CheckOutput] = []
-    timeout_s = task.budget.max_minutes_per_round * 60
-    for check in task.checks:
+    for check in checks:
         started = time.monotonic()
         try:
             completed = run_bounded(
@@ -98,6 +109,14 @@ def run_checks(task: TaskSpec, worktree: Path) -> tuple[CheckOutput, ...]:
                 )
             )
     return tuple(outputs)
+
+
+def run_checks(task: TaskSpec, worktree: Path) -> tuple[CheckOutput, ...]:
+    return run_spec_checks(
+        task.checks,
+        worktree,
+        timeout_s=task.budget.max_minutes_per_round * 60,
+    )
 
 
 def ensure_run_slot(

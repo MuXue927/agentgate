@@ -37,6 +37,20 @@ uv run ag run D:/Projects/ag-tasks/acme-report.task.yaml
 
 `repo` 字段指向**被改的那个仓库**（例如 `D:/Projects/other-project`），不是 AgentGate 自己。
 
+## 含 `holdout_checks` 的任务必须在仓库外
+
+留出判据的价值全在"执行方看不见"。`task.yaml` 一旦进了执行方的工作目录，`cat` 一下
+就读到了，判据当场失效——这不是泄露风险，是功能失效。
+
+| 放哪 | worktree 里能看到吗 | 结论 |
+|---|---|---|
+| `tasks/*.task.yaml`（入库） | **能**（`git worktree add` 会带进该 commit 的跟踪文件） | 不能写 holdout |
+| `tasks.local/`、`*.local.task.yaml`（被 gitignore） | 不能（未跟踪的文件不进 worktree） | 能，但仍靠 `.gitignore` 这条约定 |
+| 仓库外（`D:/Projects/ag-tasks/`） | 不能 | **推荐**：不依赖任何约定 |
+
+`runs/<id>/task.yaml` 快照同样含留出判据，但 `runs/` 不在 worktree 里，执行方读不到，
+这一处不必额外处理。
+
 ## 判断标准
 
 > 如果这条 `task.yaml` 被贴到公开 issue 里，你会不会不舒服？

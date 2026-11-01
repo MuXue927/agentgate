@@ -38,7 +38,25 @@ def make_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def make_task(tmp_path: Path, repo: Path) -> Path:
+def make_task(
+    tmp_path: Path,
+    repo: Path,
+    *,
+    holdout: tuple[str, ...] = (),
+) -> Path:
+    block = ""
+    if holdout:
+        lines = ["holdout_checks:"]
+        for index, run in enumerate(holdout, start=1):
+            lines.extend(
+                (
+                    f"  - name: hidden-{index}",
+                    "    run: >-",
+                    f"      {run}",
+                    "    expect: {exit: 0}",
+                )
+            )
+        block = "\n".join(lines) + "\n"
     task = tmp_path / "task.yaml"
     task.write_text(
         f"""\
@@ -53,7 +71,7 @@ checks:
   - name: tests
     run: printf ok
     expect: {{exit: 0, stdout_contains: ok}}
-budget: {{max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}}
+{block}budget: {{max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}}
 human_approval: {{before_execute: false, before_merge: true}}
 """,
         encoding="utf-8",
@@ -83,6 +101,7 @@ def test_dry_run_builds_internal_worktree_and_only_calls_git(
     assert all(Path(command[0]).name.lower().startswith("git") for command in commands)
     assert "Executor command:" in result.render()
     assert "Verifier command:" in result.render()
+    assert "HOLDOUT" not in result.render()
 
     cleanup_worktree(result.worktree.repo, result.worktree.path, result.worktree.branch)
 
@@ -179,6 +198,54 @@ def test_self_repo_requires_explicit_allow(tmp_path: Path) -> None:
     result = prepare_dry_run(task, allow_self=True)
     try:
         assert result.worktree.path == self_root / "wt" / "self-check-r1"
+    finally:
+        cleanup_worktree(
+            result.worktree.repo,
+            result.worktree.path,
+            result.worktree.branch,
+        )
+
+
+# --- P1-1: held-out checks may be counted, never shown ---------------------
+
+HOLDOUT_RUNS = (
+    "python -c \"print('held-out-alpha')\"",
+    "python -c \"print('held-out-beta')\"",
+)
+
+
+def test_holdout_not_rendered_in_execution_prompt(tmp_path: Path) -> None:
+    """The execution prompt lists the public checks and nothing else."""
+
+    repo = make_repo(tmp_path)
+    task = load_task(make_task(tmp_path, repo, holdout=HOLDOUT_RUNS))
+    worktree = Worktree(
+        repo=repo,
+        path=repo / "wt" / "fixture-r1",
+        branch="ag/fixture-r1",
+    )
+
+    prompt = build_execution_prompt(task, worktree)
+
+    assert len(task.holdout_checks) == 2
+    for index, check in enumerate(task.holdout_checks, start=1):
+        assert f"hidden-{index}" not in prompt
+        assert check.run not in prompt
+    # The public list is still there -- this is not "render no checks at all".
+    assert "tests: printf ok" in prompt
+
+
+def test_dry_run_hides_holdout_but_counts_them(tmp_path: Path) -> None:
+    repo = make_repo(tmp_path)
+    result = prepare_dry_run(make_task(tmp_path, repo, holdout=HOLDOUT_RUNS))
+
+    try:
+        rendered = result.render()
+
+        assert "HOLDOUT: 2 checks (not shown)" in rendered
+        for check in result.task.holdout_checks:
+            assert check.name not in rendered
+            assert check.run not in rendered
     finally:
         cleanup_worktree(
             result.worktree.repo,

@@ -23,6 +23,7 @@ from agentgate.expectations import (
     build_mechanical_verdict,
     evaluate_checks,
 )
+from agentgate.holdout import HoldoutResult, evaluate_holdout
 from agentgate.proc import run_bounded
 from agentgate.protected import FileChange, ProtectedResult, evaluate_protected
 from agentgate.spec import (
@@ -63,7 +64,8 @@ class VerificationOutcome:
     attempts: tuple[AttemptResult, ...]
     # Carries the human sentence for any non-verdict ending. `failure_reason`
     # decides which one it is: empty means BLOCKED (the run stopped for an
-    # environmental reason), "no-progress" means FAILED (a real outcome).
+    # environmental reason), "no-progress" or "holdout-failed" mean FAILED (a
+    # real outcome).
     blocked_reason: str = ""
     failure_reason: str = ""
     before_status: str = ""
@@ -75,6 +77,9 @@ class VerificationOutcome:
     # rounds, so it has to copy this back itself -- otherwise the saved state
     # loses the detail and the report can only print "R?".
     no_progress: dict[str, Any] | None = None
+    # Indexes and output tails only: the held-out commands stay in the round's
+    # holdout.json. `ag run` copies this back for the same reason as above.
+    holdout: dict[str, Any] | None = None
 
 
 CommandRunner = Callable[
@@ -272,6 +277,15 @@ def _write_evidence(round_dir: Path, evidence: EvidencePack) -> None:
 def _write_subject(round_dir: Path, subject: Subject) -> None:
     (round_dir / "subject.json").write_text(
         json.dumps(subject.as_document(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_holdout(round_dir: Path, holdout: HoldoutResult) -> None:
+    """Keep the commands local. This file is for humans, never for a model."""
+
+    (round_dir / "holdout.json").write_text(
+        json.dumps(holdout.as_document(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
 
@@ -533,6 +547,7 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
         "protected.json",
         "evidence.json",
         "subject.json",
+        "holdout.json",
     ):
         path = round_dir / artifact
         if path.is_file():
@@ -690,6 +705,50 @@ def _record_no_progress(
         encoding="utf-8",
     )
     return detail
+
+
+def _record_holdout_failure(
+    run_dir: Path,
+    round_no: int,
+    reason: str,
+    *,
+    subject: Subject,
+    mechanical: MechanicalResult,
+    holdout: dict[str, Any],
+) -> None:
+    """Record a FAILED round: a held-out check the executor never saw failed.
+
+    Deliberately *not* a defect: a defect needs a runnable `reproduce`, and
+    filling that in would hand the held-out command to the executor on the next
+    round. The round keeps its subject and its own mechanical result -- the
+    evidence that the public checks really were green when the hidden one ran.
+    """
+
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        return
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    for entry in state.get("rounds", []):
+        if entry.get("round") == round_no:
+            entry["status"] = "failed"
+            entry["failure_reason"] = "holdout-failed"
+            entry["holdout"] = holdout
+            entry["subject"] = subject.as_document()
+            entry["mechanical"] = mechanical.as_document()
+            for stale_key in ("verdict", "defect_fingerprints"):
+                entry.pop(stale_key, None)
+            break
+    else:
+        return
+    state["terminal_reason"] = reason
+    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    state_path.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _record_round_in_state(
@@ -856,6 +915,45 @@ def verify_round(
 
     mechanical = evaluate_checks(stored_checks)
     _write_mechanical(round_dir, mechanical)
+
+    # Held-out checks run only once the public ones are green. Two reasons: a
+    # round that already fails has a cheaper answer, and a hidden check must not
+    # colour the defect feedback of a round that never got that far. A failure
+    # here is terminal -- no defect, no extra round (see `holdout` docstring).
+    if task.holdout_checks and mechanical.ok:
+        holdout = evaluate_holdout(task, worktree)
+        _write_holdout(round_dir, holdout)
+        if not holdout.ok:
+            reason = holdout.reason_line(round_no)
+            detail = holdout.summary_document()
+            _record_holdout_failure(
+                run_dir,
+                round_no,
+                reason,
+                subject=subject,
+                mechanical=mechanical,
+                holdout=detail,
+            )
+            write_marker(run_dir, "FAILED", reason)
+            set_status(run_dir, "failed")
+            return VerificationOutcome(
+                task_id=task_id,
+                round_dir=round_dir,
+                verdict=None,
+                attempts=(),
+                blocked_reason=reason,
+                failure_reason="holdout-failed",
+                before_status=before_status,
+                after_status=before_status,
+                mechanical=mechanical,
+                protected=protected,
+                holdout=detail,
+            )
+        # The held-out commands run in the worktree exactly like the public
+        # checks, so the baseline the verifier-drift check compares against is
+        # taken after them rather than before: a check that writes an ignored
+        # file must not be reported as "verifier modified the worktree".
+        before_status = _git_status(worktree)
 
     # The no-progress gate needs this round's own mechanical result, so it sits
     # after the checks run -- but still before the evidence pack and before the

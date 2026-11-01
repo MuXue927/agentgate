@@ -553,6 +553,10 @@ def _drive(
                     # comparison the verifier recorded has to be copied here;
                     # otherwise the report can only say "R?".
                     current_round["no_progress"] = verification.no_progress
+                if verification.holdout is not None:
+                    # Same reason: indexes and output tails only, never the
+                    # held-out commands (those stay in round-N/holdout.json).
+                    current_round["holdout"] = verification.holdout
                 state = _finish(
                     task,
                     run_dir,

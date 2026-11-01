@@ -21,16 +21,23 @@ class DryRunResult:
     verifier_command: tuple[str, ...]
 
     def render(self) -> str:
-        return "\n".join(
+        lines = [
+            f"Task: {self.task.id}",
             (
-                f"Task: {self.task.id}",
-                (
-                    f"Model pair: {self.pair.tier} "
-                    f"({self.pair.executor_family} -> {self.pair.verifier_family})"
-                ),
-                f"Worktree: {self.worktree.path}",
-                f"Branch: {self.worktree.branch}",
-                describe_declared(self.task.protected),
+                f"Model pair: {self.pair.tier} "
+                f"({self.pair.executor_family} -> {self.pair.verifier_family})"
+            ),
+            f"Worktree: {self.worktree.path}",
+            f"Branch: {self.worktree.branch}",
+            describe_declared(self.task.protected),
+        ]
+        if self.task.holdout_checks:
+            # Count only. A dry run is still an output a human may paste into
+            # the task file; the held-out commands themselves never leave
+            # holdout.json.
+            lines.append(f"HOLDOUT: {len(self.task.holdout_checks)} checks (not shown)")
+        lines.extend(
+            (
                 (
                     f"Evidence: 每个改动文件全文，单文件上限 {PER_FILE_LIMIT // 1024} KiB"
                     f" / 总量 {TOTAL_LIMIT // 1024} KiB；截断会在验收输入头部与"
@@ -46,6 +53,7 @@ class DryRunResult:
                 "No model API process was started (dry-run).",
             )
         )
+        return "\n".join(lines)
 
 
 def _bullet_lines(values: Iterable[str]) -> str:

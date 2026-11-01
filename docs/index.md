@@ -58,6 +58,7 @@ uv run ag report <task-id>
 - [STEP 9：证据包与约束判定（P1-2）](steps/step-9-evidence-pack.md)
 - [STEP 10：判决绑定证据身份（P0-2）](steps/step-10-subject.md)
 - [STEP 11：探针阈值/clean 文案 + 无净进展（P1-3）](steps/step-11-no-progress.md)
+- [STEP 12：留出判据 holdout_checks（P1-1）](steps/step-12-holdout.md)
 
 所有相对链接均以 `docs/` 为基准。STEP 文件由根目录迁入 `docs/steps/`，
 正文内容保持不变；`docs/design.md` 仍是规范设计参考，不因整理文档而删改

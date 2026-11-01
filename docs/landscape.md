@@ -238,11 +238,18 @@ FAIL → 最终 FAIL（两侧都 PASS 才算 PASS）。这条防的是"机检通
 ### P1-1 held-out 判据（`holdout_checks`）
 
 - 问题：验收标准全公开，执行方可以对着清单写。
-- 做法：可选 `holdout_checks`，结构同 `checks`；**不渲染进执行提示词**，
-  由 collector 跑、结果只进验收输入。数量限定 1–3 条，写清"用来发现过拟合"。
+- 做法：可选 `holdout_checks`，结构同 `checks`，**1–3 条**；**不渲染进执行方可见的
+  任何输出**（`--dry-run` 只报条数）。只在公开 `checks` 全绿后执行，全通过才继续
+  走无净进展 → 证据包 → 验收方。
+- 结局语义（**不是**"只进验收输入"）：失败即终态 `FAILED`，`verdict=None`、
+  `failure_reason="holdout-failed"`，不调验收方、不生成 defect、不重试。
+  报告只写序号与输出尾部，完整命令只落本轮 `holdout.json`。
+- **为什么不回灌**：defect 的 `reproduce` 必须是可直接执行的命令。填了就等于从
+  第二轮起把留出判据交给执行方，判据本身消失。这一条比"多一轮自愈"重要。
 - 借鉴自：SpecBench 的 visible/held-out 双层、Loki 的确定性扣留。
-- 风险：`task.yaml` 若放在目标仓库内会被执行方读到——文档必须写明
-  "含 holdout 的任务文件放仓库外"（`tasks/README.md` 已有同类约定）。
+- 风险：`task.yaml` 若放在目标仓库内会被执行方读到——含 holdout 的任务文件必须
+  放仓库外（`tasks/README.md` 已有同类约定）。
+- 落地：`docs/steps/step-12-holdout.md`。
 
 ### P1-2 证据包：把"卷宗"给法官，但不给工具
 

@@ -122,6 +122,51 @@
         }
       }
     },
+    "holdout_checks": {
+      "description": "Checks held out of the executor prompt. Requires checks: without a public list there is no loop to run.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "run", "expect"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "run": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expect": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "exit": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "stdout_contains": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stdout_not_contains": {
+                "type": "string",
+                "minLength": 1
+              },
+              "stdout_regex": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      }
+    },
     "budget": {
       "type": "object",
       "additionalProperties": false,

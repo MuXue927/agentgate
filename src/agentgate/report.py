@@ -69,6 +69,8 @@ def _round_fact(round_state: dict[str, Any]) -> str:
     number = round_state.get("round", "?")
     if str(round_state.get("failure_reason") or "") == "no-progress":
         return f"R{number} 无净进展"
+    if str(round_state.get("failure_reason") or "") == "holdout-failed":
+        return f"R{number} 留出判据未通过"
     verdict = round_state.get("verdict")
     if not isinstance(verdict, dict):
         status = str(round_state.get("status", "unknown")).lower()
@@ -261,6 +263,34 @@ def _no_progress_lines(round_list: list[dict[str, Any]]) -> list[str]:
     return lines
 
 
+def _holdout_lines(round_list: list[dict[str, Any]]) -> list[str]:
+    """Why the run stopped, when a check the executor never saw failed.
+
+    Index and output tail only. The command lives in `round-N/holdout.json`
+    for a human who needs it; putting it in the report (or in the defect
+    feedback) would give the executor the very thing being held out.
+    """
+
+    if not round_list:
+        return []
+    last = round_list[-1]
+    if str(last.get("failure_reason") or "") != "holdout-failed":
+        return []
+    detail = last.get("holdout")
+    detail = detail if isinstance(detail, dict) else {}
+    failed = [
+        item
+        for item in detail.get("failed") or []
+        if isinstance(item, dict) and item.get("index") is not None
+    ]
+    listed = "、".join(
+        f'#{item["index"]}（输出尾部 "{item.get("tail", "")}"）' for item in failed
+    )
+    return [
+        f"留出判据未通过：{listed or '（详情见本轮 holdout.json）'}，未调用验收方。"
+    ]
+
+
 def _conclusion(
     state: dict[str, Any],
     summary: ChangeSummary | None,
@@ -281,7 +311,7 @@ def _conclusion(
     subject = _subject_fact(round_list)
     if subject is not None:
         facts.insert(0, subject)
-    return [*_no_progress_lines(round_list), *facts]
+    return [*_no_progress_lines(round_list), *_holdout_lines(round_list), *facts]
 
 
 def _parse_numstat(output: str, statuses: dict[str, str]) -> ChangeSummary:

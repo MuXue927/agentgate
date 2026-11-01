@@ -54,6 +54,11 @@ human_approval`
 命中即终态 `BLOCKED`，不消耗轮次、不调验收方——这是唯一能挡住"把测试改松"
 的检查。详见指南 §1.9。
 
+第二个可选字段 `holdout_checks`：留出判据，结构同 `checks`、限 1–3 条，
+**不进执行方可见的任何输出**（`--dry-run` 只报条数）。公开判据全绿后才跑，
+失败即终态 `FAILED: holdout-failed`、不调验收方、**不回灌成 defect**（否则
+`reproduce` 会把判据交出去）。含它的任务文件必须放仓库外，详见指南 §1.11。
+
 `templates/add-feature.task.yaml` 全文：
 
 ```yaml

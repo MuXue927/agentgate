@@ -83,3 +83,80 @@ def test_sandbox_defaults_to_none(tmp_path: Path) -> None:
 
     assert task.executor.sandbox is None
     assert task.verifier.sandbox is None
+
+
+# --- P1-1: holdout_checks is an optional second list, 1-3 items -----------
+
+
+def _holdout_task(tmp_path: Path, *, checks: str, holdout: str) -> Path:
+    task_path = tmp_path / "holdout.task.yaml"
+    task_path.write_text(
+        f"""\
+id: holdout-schema
+repo: {tmp_path.as_posix()}
+goal: Exercise the holdout_checks contract.
+executor: {{harness: codex, model: deepseek-v4-flash}}
+verifier: {{harness: codex, model: nvidia/nemotron-3.5-lightning:free}}
+constraints: []
+{checks}{holdout}budget: {{max_rounds: 1, max_minutes_per_round: 5, max_total_minutes: 10}}
+human_approval: {{before_execute: false, before_merge: true}}
+""",
+        encoding="utf-8",
+    )
+    return task_path
+
+
+def test_holdout_without_public_checks_is_rejected(tmp_path: Path) -> None:
+    """Held-out alone has no loop to run, so `checks` stays required."""
+
+    task_path = _holdout_task(
+        tmp_path,
+        checks="",
+        holdout=(
+            "holdout_checks:\n"
+            "  - name: hidden-1\n"
+            "    run: printf ok\n"
+            "    expect: {exit: 0}\n"
+        ),
+    )
+
+    with pytest.raises(SpecError, match=r"checks: required field is missing"):
+        load_task(task_path)
+
+
+def test_holdout_is_limited_to_three(tmp_path: Path) -> None:
+    """A holdout list is a detector, not a second exam."""
+
+    items = "".join(
+        f"  - name: hidden-{index}\n    run: printf ok\n    expect: {{exit: 0}}\n"
+        for index in range(1, 5)
+    )
+    task_path = _holdout_task(
+        tmp_path,
+        checks="checks:\n  - name: public\n    run: printf ok\n    expect: {exit: 0}\n",
+        holdout=f"holdout_checks:\n{items}",
+    )
+
+    with pytest.raises(SpecError, match=r"holdout_checks") as error:
+        load_task(task_path)
+
+    assert "too long" in str(error.value)
+
+
+def test_holdout_checks_parse_alongside_checks(tmp_path: Path) -> None:
+    task_path = _holdout_task(
+        tmp_path,
+        checks="checks:\n  - name: public\n    run: printf ok\n    expect: {exit: 0}\n",
+        holdout=(
+            "holdout_checks:\n"
+            "  - name: hidden-1\n"
+            "    run: printf hidden\n"
+            "    expect: {exit: 0, stdout_contains: hidden}\n"
+        ),
+    )
+
+    task = load_task(task_path)
+
+    assert [check.name for check in task.checks] == ["public"]
+    assert [check.name for check in task.holdout_checks] == ["hidden-1"]
+    assert task.holdout_checks[0].expect == {"exit": 0, "stdout_contains": "hidden"}

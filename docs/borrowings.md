@@ -16,7 +16,7 @@
 | P0-1 | `expect` 只进提示词，真实 exit code 从未被代码比对 | [loope](https://github.com/mateaix/loope) `--verify-cmd` 退出码硬门；[agent-loops](https://github.com/andromarces/agent-loops) 运行时在评审沙箱外跑测试 | 新增纯函数逐键判定 `expect`；失败时不调验收模型，直接由机检结果合成缺陷并进入回灌；`where` 加 `mechanical:` 前缀 | 0250082 |
 | P0-2 | 判决没绑定它判的那个版本 | [claude-kit](https://github.com/ajyadav013/claude-kit/blob/main/docs/maker-checker.md) 对当前 digest 给 typed PASS；[review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md) APPROVE 只对当前 revision 有效 | 由 collector 写 `subject.json`，验收方原样回抄，验收后重算比对；不一致即 `BLOCKED: stale-subject`。不引入对方的 envelope 结构 | `83df219` |
 | P0-3 | 执行方可改测试与任务文件 | [EvilGenie / SpecBench 的测试篡改与刷分度量](https://weco.ai/blog/specbench)；[Loki 的 held-out 闸门](https://dev.to/asklokesh/loki-mode-at-20k-developers-15-releases-in-4-days-and-what-we-learned-about-verified-vs-live-446c) | `task.yaml` 可选 `protected` glob；按 `git diff --name-status` 的 M/D/R 拦、A 放行；检查排在机检之前，命中即终态 BLOCKED，不碰 hook、不 vendor 对方任何代码 | `51c2c5f` |
-| P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`，不渲染进执行提示词，只由 collector 跑、结果进验收输入；限定 1–3 条 | |
+| P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`（1–3 条），**不进执行方可见的任何输出**（dry-run 只报条数）；只在公开机检全绿后跑；失败即终态 `FAILED: holdout-failed`，**不回灌成 defect**（`reproduce` 会泄题），完整命令只落 `holdout.json` | `feat: held-out 判据，不渲染进执行方提示词（P1-1）` |
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
 | P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：比 **机检失败集合**（P0-1 已算、确定性、不含模型措辞），第 N(≥2) 轮与第 N-1 轮完全相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，模型调用 0 次。第一版比过 `subject.diff_sha256`，因不可达已删除 | `fix: P1-3 判据改为机检失败集合（原字节哈希判据不可达）` |
 | P1-4 | `resume --force` 先删旧档再验证新 run，失败不可恢复 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 只做原子替换（临时文件 + `os.replace`）与"先验证后删除"，不引入 SQLite | |
@@ -62,11 +62,20 @@
 
 ### P1-1 held-out 判据
 
-- 问题：执行提示词里列了全部 `checks`（`dryrun.py:54`）。
-- 来源：SpecBench 的 visible/held-out 双层结构。
-- 独立设计：`holdout_checks` 与 `checks` 同构但单独一段，不进执行提示词；
-  限定条数，避免把小任务变成考试。
-- commit：（待填）
+- 问题：执行提示词里列了全部 `checks`（`dryrun.py:72`），执行方可以照着清单写。
+- 来源：SpecBench 的 visible/held-out 双层结构、Loki 的确定性扣留。
+- 独立设计：`holdout_checks` 与 `checks` 同构但单独一段（schema 限 1–3 条），**不进
+  任何执行方可见的输出**——`build_execution_prompt` 只渲染 `checks`，`--dry-run`
+  只报条数。执行时机在公开机检全绿之后（`verifier.py:923`），失败即终态：
+  `verdict=None`、`failure_reason="holdout-failed"`、模型 0 次调用。
+  判定与执行复用 `collector.run_spec_checks` / `expectations.evaluate_expect`，
+  与公开检查同一套超时与断言语义，不新增判定代码。
+- 与来源的差异：原案写的是"结果只进验收输入"，落地时改成**终态不回灌**。理由：
+  defect 的 `reproduce` 必须可直接执行，一旦回灌，第二轮起留出判据就等于公开了；
+  而"让验收方参考留出结果"也不必要——留出失败本身就是终局。
+- 已知边界：`task.yaml` 放在目标仓库内会失效（worktree 里能读到），文档写明必须
+  放仓库外。这一条是使用约定，代码不拦。
+- commit：本批唯一提交（标题见上表）。
 
 ### P1-2 证据包
 

@@ -707,3 +707,77 @@ def test_no_progress_detail_survives_the_orchestrator_state(
                 repo / "wt" / f"loop-fixture-r{number}",
                 f"ag/loop-fixture-r{number}",
             )
+
+
+def test_holdout_detail_survives_the_orchestrator_state(
+    tmp_path: Path,
+) -> None:
+    """`ag run` keeps state in memory; the held-out detail must survive it.
+
+    Same class of bug as the no-progress regression above: the verifier writes
+    the round detail to disk and the orchestrator then saves its own copy over
+    it. Without copying, report.md loses the index and the output tail and the
+    run ends with an unexplained `holdout-failed`.
+    """
+
+    repo = make_repo(tmp_path)
+    task = make_task(tmp_path, repo, max_rounds=5)
+    tools = FakeRoundTools(repo, tmp_path / "runs", verdicts=[verdict("PASS")])
+    reason = (
+        "holdout-failed: round 1 did not clear its held-out checks "
+        "(#1 AssertionError: empty input)"
+    )
+
+    def verifier(task_id: str, **kwargs: object) -> VerificationOutcome:
+        round_no = int(kwargs["round_no"])
+        tools.verification_calls.append(round_no)
+        return VerificationOutcome(
+            task_id=task_id,
+            round_dir=tmp_path / "runs" / task_id / f"round-{round_no}",
+            verdict=None,
+            attempts=(),
+            blocked_reason=reason,
+            failure_reason="holdout-failed",
+            holdout={
+                "checked": 1,
+                "failed": [
+                    {
+                        "index": 1,
+                        "name": "hidden-empty",
+                        "tail": "AssertionError: empty input",
+                    }
+                ],
+            },
+        )
+
+    outcome = start_task(
+        task,
+        runs_root=tmp_path / "runs",
+        executor=tools.executor,
+        verifier=verifier,
+        usage_provider=usage,
+    )
+    run_dir = tmp_path / "runs" / "loop-fixture"
+    try:
+        rounds = outcome.state["rounds"]
+        assert outcome.state["status"] == "failed"
+        assert rounds[-1]["status"] == "failed"
+        assert rounds[-1]["failure_reason"] == "holdout-failed"
+        assert rounds[-1]["holdout"]["failed"][0]["index"] == 1
+
+        report = (run_dir / "report.md").read_text(encoding="utf-8")
+        assert (
+            '留出判据未通过：#1（输出尾部 "AssertionError: empty input"），未调用验收方。'
+            in report
+        )
+        assert "- R1: holdout-failed" in report
+        # A held-out failure never opens a second round, and the command stays
+        # in holdout.json rather than reaching any human-facing text.
+        assert len(tools.execution_calls) == 1
+        assert "sys.exit" not in report
+    finally:
+        cleanup_worktree(
+            repo,
+            repo / "wt" / "loop-fixture-r1",
+            "ag/loop-fixture-r1",
+        )
