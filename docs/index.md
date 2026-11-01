@@ -59,6 +59,7 @@ uv run ag report <task-id>
 - [STEP 10：判决绑定证据身份（P0-2）](steps/step-10-subject.md)
 - [STEP 11：探针阈值/clean 文案 + 无净进展（P1-3）](steps/step-11-no-progress.md)
 - [STEP 12：留出判据 holdout_checks（P1-1）](steps/step-12-holdout.md)
+- [STEP 13：状态写入原子化与单一写入者（P1-4）](steps/step-13-state-writes.md)
 
 所有相对链接均以 `docs/` 为基准。STEP 文件由根目录迁入 `docs/steps/`，
 正文内容保持不变；`docs/design.md` 仍是规范设计参考，不因整理文档而删改

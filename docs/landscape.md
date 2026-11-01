@@ -292,11 +292,19 @@ FAIL → 最终 FAIL（两侧都 PASS 才算 PASS）。这条防的是"机检通
 
 ### P1-4 状态写入原子化 + `resume --force` 先验后删
 
-- 问题：README「常见坑」自认：`resume --force` 在验证新 run 能否启动之前就
-  删了旧 run 目录，失败即不可恢复。
-- 做法：`state.json` 一律写临时文件后 `os.replace`；删除旧目录推迟到
-  "新 run 已成功启动"之后。
-- 借鉴自：zeroshot 的 crash-safe 状态。我们只做原子替换，不引入 SQLite。
+- 问题之一（已修，`c60a370` 前批）：`resume --force` 在验证新 run 能否启动之前就
+  删了旧 run 目录，失败即不可恢复。现在先 `load_task` + 模型对校验，通过后才归档旧 run。
+- 问题之二（本批）：`state.json` 有**多个写入者，各自"读-改-写"**（verifier 6 处、
+  orchestrator 2 处、report 1 处），谁最后写谁赢，新字段会被旧快照吃掉；且写入非原子，
+  中途被杀留下截断 JSON。批次 G 的 `R?` 就是这个病的一次显形。
+- 做法：`status.py` 收成四个入口——`write_state`（同目录临时文件 + `os.replace`）、
+  `update_state`（读最新盘上文档 → `mutate` → 原子写，唯一修改入口）、
+  `create_state`（首写，已存在则拒绝）、`load_state`（必填键校验，坏 JSON 报路径不重建）。
+  全部写入改走 `update_state`；`ag run` 的 `_save` 退化为**按 `round` 号定位、按键合并**的
+  delta，不再回写整份内存快照。
+- 已知边界：合并是"按 key、内存值胜"，不解决"同一键两人都写、内存那份更旧"——那需要版本号或
+  文件锁。现实路径上 `_drive` 会把 verifier 的返回值抄进内存，同键不同值不会发生。
+- 借鉴自：zeroshot 的 crash-safe 状态。我们只做原子替换 + 单一写入者，不引入 SQLite/文件锁。
 
 ### P1-5 假后端只存在于测试里
 

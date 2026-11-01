@@ -17,9 +17,11 @@ from agentgate.report import write_report
 from agentgate.spec import PROJECT_ROOT, TaskSpec, load_task, require_allowed_repo
 from agentgate.status import (
     clear_markers,
+    create_state,
+    load_state,
     read_state,
+    update_state,
     write_marker,
-    write_state,
 )
 from agentgate.validation import evaluate_model_pair, require_different_models
 from agentgate.verifier import VerificationOutcome, verify_round
@@ -274,8 +276,33 @@ def _new_state(
 
 
 def _save(run_dir: Path, state: dict[str, Any]) -> None:
-    state["updated_at"] = _now_iso()
-    write_state(run_dir, state)
+    """Merge this process's view into the newest state on disk.
+
+    Run-level fields are written as they are; round entries are merged key by
+    key and located by `round`. Writing the whole in-memory snapshot back is
+    what lost the P1-3 `no_progress` detail: the verifier had committed a
+    field this process never held, and replacing the entry dropped it. With a
+    merge, a field the orchestrator does not know about survives by
+    construction -- including the next one somebody adds.
+    """
+
+    def mutate(current: dict[str, Any]) -> None:
+        for key, value in state.items():
+            if key != "rounds":
+                current[key] = value
+        entries = {
+            entry.get("round"): entry
+            for entry in current.get("rounds") or []
+            if isinstance(entry, dict)
+        }
+        for entry in state.get("rounds") or []:
+            target = entries.get(entry.get("round"))
+            if target is None:
+                current.setdefault("rounds", []).append(dict(entry))
+            else:
+                target.update(entry)
+
+    update_state(run_dir, mutate)
 
 
 def _finish(
@@ -302,8 +329,12 @@ def _finish(
     _save(run_dir, state)
     marker = {"done": "DONE", "failed": "FAILED", "blocked": "BLOCKED"}[status]
     write_marker(run_dir, marker, reason)
-    write_report(task, state, run_dir=run_dir, repo=task.repo)
-    return state
+    # Report from what is actually on disk, not from this process's snapshot:
+    # a verifier that ran inside this round may have committed detail the loop
+    # never held (`no_progress`, `subject`, `holdout`).
+    latest = read_state(run_dir) or state
+    write_report(task, latest, run_dir=run_dir, repo=task.repo)
+    return latest
 
 
 def _stage_elapsed(clock: Callable[[], float], started: float) -> float:
@@ -692,7 +723,7 @@ def start_task(
         effective_max_rounds=effective,
         usage_before=usage_before,
     )
-    write_state(run_dir, state)
+    create_state(run_dir, state)
     return _drive(
         task,
         run_dir=run_dir,
@@ -720,9 +751,7 @@ def resume_task(
 ) -> RunOutcome:
     root = runs_root or (PROJECT_ROOT / "runs")
     run_dir = _run_dir(root, task_id)
-    state = read_state(run_dir)
-    if state is None:
-        raise OrchestratorError(f"Run state not found: {run_dir / 'state.json'}")
+    state = load_state(run_dir)
     task = _task_for_state(run_dir)
     if state.get("status") in TERMINAL_STATUSES and not force:
         raise OrchestratorError(

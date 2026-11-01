@@ -5,7 +5,6 @@ import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,14 @@ from agentgate.spec import (
     load_task,
     validate_verdict_document,
 )
-from agentgate.status import clear_markers, set_status, write_marker
+from agentgate.status import (
+    clear_markers,
+    load_state,
+    read_state,
+    set_status,
+    update_state,
+    write_marker,
+)
 from agentgate.subject import Subject, compute_subject, subject_mismatch
 from agentgate.validation import require_different_models
 
@@ -319,12 +325,8 @@ def _round_head_commit(run_dir: Path, round_no: int) -> str | None:
     worktree and says so in its source label.
     """
 
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return None
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    state = read_state(run_dir)
+    if state is None:
         return None
     rounds = state.get("rounds")
     if not isinstance(rounds, list):
@@ -334,6 +336,25 @@ def _round_head_commit(run_dir: Path, round_no: int) -> str | None:
             head = entry.get("head_commit")
             return str(head) if head else None
     return None
+
+
+def _read_round_state(state_path: Path) -> dict[str, Any]:
+    """The collector's snapshot of this round, or a refusal to guess.
+
+    Corrupt JSON is reported with its path instead of being re-collected or
+    read as empty: both would judge a tree against a round that never
+    happened.
+    """
+
+    try:
+        document = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VerificationError(
+            f"Unreadable round state: {state_path} ({exc})"
+        ) from exc
+    if not isinstance(document, dict):
+        raise VerificationError(f"Round state root must be an object: {state_path}")
+    return document
 
 
 def _protected_gate(
@@ -554,6 +575,30 @@ def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
             path.unlink()
 
 
+def _update_run_state(
+    run_dir: Path,
+    mutate: Callable[[dict[str, Any]], Any],
+) -> Any:
+    """Apply a change to the run state, or nothing when the run has none.
+
+    A round can exist without a run state (`ag verify` on artifacts assembled
+    by hand, or a run from before state.json existed). The round artifacts are
+    still the record then, so this is not an error -- but it is also not a
+    reason to invent a state document nobody can resume.
+    """
+
+    if not (run_dir / "state.json").is_file():
+        return None
+    return update_state(run_dir, mutate)
+
+
+def _round_entry(state: dict[str, Any], round_no: int) -> dict[str, Any] | None:
+    for entry in state.get("rounds", []):
+        if isinstance(entry, dict) and entry.get("round") == round_no:
+            return entry
+    return None
+
+
 def _record_blocked_round(
     run_dir: Path,
     round_no: int,
@@ -563,33 +608,22 @@ def _record_blocked_round(
 ) -> None:
     """Mark the round BLOCKED in state.json without inventing a verdict."""
 
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    for entry in state.get("rounds", []):
-        if entry.get("round") == round_no:
-            entry["status"] = "blocked"
-            entry["blocked_reason"] = reason
-            if protected is not None:
-                entry["protected"] = protected.as_document()
-            # A blocked round has no verdict and no mechanical result. Leaving
-            # a previous PASS here (e.g. after `ag verify --force`) makes the
-            # report say "R1 PASS" and "BLOCKED" at the same time.
-            for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
-                entry.pop(stale_key, None)
-            break
-    else:
-        return
-    state["terminal_reason"] = reason
-    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    state_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    def mutate(state: dict[str, Any]) -> None:
+        entry = _round_entry(state, round_no)
+        if entry is None:
+            return
+        entry["status"] = "blocked"
+        entry["blocked_reason"] = reason
+        if protected is not None:
+            entry["protected"] = protected.as_document()
+        # A blocked round has no verdict and no mechanical result. Leaving
+        # a previous PASS here (e.g. after `ag verify --force`) makes the
+        # report say "R1 PASS" and "BLOCKED" at the same time.
+        for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
+            entry.pop(stale_key, None)
+        state["terminal_reason"] = reason
+
+    _update_run_state(run_dir, mutate)
 
 
 def _record_protected_block(
@@ -623,12 +657,8 @@ def _previous_mechanical_failures(
 
     if round_no < 2:
         return None
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return None
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    state = read_state(run_dir)
+    if state is None:
         return None
     rounds = state.get("rounds") if isinstance(state, dict) else None
     if not isinstance(rounds, list):
@@ -676,34 +706,24 @@ def _record_no_progress(
         "failing_checks": failing,
         "previous_failing_checks": list(previous_failed),
     }
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return detail
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return detail
-    for entry in state.get("rounds", []):
-        if entry.get("round") == round_no:
-            entry["status"] = "failed"
-            entry["failure_reason"] = "no-progress"
-            entry["no_progress"] = detail
-            # The subject and this round's own mechanical result are the proof
-            # of the claim, so they stay. A verdict from an earlier `--force`
-            # would contradict the round's status, so that goes.
-            entry["subject"] = subject.as_document()
-            entry["mechanical"] = mechanical.as_document()
-            for stale_key in ("verdict", "defect_fingerprints"):
-                entry.pop(stale_key, None)
-            break
-    else:
-        return detail
-    state["terminal_reason"] = reason
-    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    state_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+
+    def mutate(state: dict[str, Any]) -> None:
+        entry = _round_entry(state, round_no)
+        if entry is None:
+            return
+        entry["status"] = "failed"
+        entry["failure_reason"] = "no-progress"
+        entry["no_progress"] = detail
+        # The subject and this round's own mechanical result are the proof
+        # of the claim, so they stay. A verdict from an earlier `--force`
+        # would contradict the round's status, so that goes.
+        entry["subject"] = subject.as_document()
+        entry["mechanical"] = mechanical.as_document()
+        for stale_key in ("verdict", "defect_fingerprints"):
+            entry.pop(stale_key, None)
+        state["terminal_reason"] = reason
+
+    _update_run_state(run_dir, mutate)
     return detail
 
 
@@ -724,31 +744,20 @@ def _record_holdout_failure(
     evidence that the public checks really were green when the hidden one ran.
     """
 
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
-    for entry in state.get("rounds", []):
-        if entry.get("round") == round_no:
-            entry["status"] = "failed"
-            entry["failure_reason"] = "holdout-failed"
-            entry["holdout"] = holdout
-            entry["subject"] = subject.as_document()
-            entry["mechanical"] = mechanical.as_document()
-            for stale_key in ("verdict", "defect_fingerprints"):
-                entry.pop(stale_key, None)
-            break
-    else:
-        return
-    state["terminal_reason"] = reason
-    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    state_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    def mutate(state: dict[str, Any]) -> None:
+        entry = _round_entry(state, round_no)
+        if entry is None:
+            return
+        entry["status"] = "failed"
+        entry["failure_reason"] = "holdout-failed"
+        entry["holdout"] = holdout
+        entry["subject"] = subject.as_document()
+        entry["mechanical"] = mechanical.as_document()
+        for stale_key in ("verdict", "defect_fingerprints"):
+            entry.pop(stale_key, None)
+        state["terminal_reason"] = reason
+
+    _update_run_state(run_dir, mutate)
 
 
 def _record_round_in_state(
@@ -766,34 +775,24 @@ def _record_round_in_state(
     "executed but not yet verified".
     """
 
-    state_path = run_dir / "state.json"
-    if not state_path.is_file():
-        return
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return
     status = {
         "PASS": "verified_pass",
         "FAIL": "verified_fail",
         "BLOCKED": "blocked",
     }.get(str(verdict.get("verdict")), "verified_fail")
-    for entry in state.get("rounds", []):
-        if entry.get("round") == round_no:
-            entry["status"] = status
-            entry["verdict"] = verdict
-            if mechanical is not None:
-                entry["mechanical"] = mechanical.as_document()
-            if protected is not None:
-                entry["protected"] = protected.as_document()
-            break
-    else:
-        return
-    state["updated_at"] = datetime.now().isoformat(timespec="seconds")
-    state_path.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+
+    def mutate(state: dict[str, Any]) -> None:
+        entry = _round_entry(state, round_no)
+        if entry is None:
+            return
+        entry["status"] = status
+        entry["verdict"] = verdict
+        if mechanical is not None:
+            entry["mechanical"] = mechanical.as_document()
+        if protected is not None:
+            entry["protected"] = protected.as_document()
+
+    _update_run_state(run_dir, mutate)
 
 
 def verify_round(
@@ -833,7 +832,7 @@ def verify_round(
         )
 
     task = load_task(task_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state = _read_round_state(state_path)
     if state.get("task_id") != task_id:
         raise VerificationError("state.json task_id does not match run directory")
     if state.get("status") != "executed":
@@ -858,6 +857,14 @@ def verify_round(
         executor_scaffold=task.executor.harness,
         verifier_scaffold=task.verifier.harness,
     )
+
+    # The run state is optional for a round, but when it is there it has to be
+    # readable: both the round's head commit and the no-progress baseline are
+    # read from it later, and a document nobody can parse would silently turn
+    # that gate off instead of failing. `require=("rounds",)` because a round
+    # verification reads nothing else from it.
+    if (run_dir / "state.json").is_file():
+        load_state(run_dir, require=("rounds",))
 
     stored_checks = _stored_checks(task, round_dir)
     before_status = _git_status(worktree)

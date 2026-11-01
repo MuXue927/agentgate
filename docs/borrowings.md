@@ -19,7 +19,7 @@
 | P1-1 | 验收标准全公开，执行方可对着清单写 | [SpecBench](https://weco.ai/blog/specbench) visible/held-out 双套；Loki 确定性扣留 | 可选 `holdout_checks`（1–3 条），**不进执行方可见的任何输出**（dry-run 只报条数）；只在公开机检全绿后跑；失败即终态 `FAILED: holdout-failed`，**不回灌成 defect**（`reproduce` 会泄题），完整命令只落 `holdout.json` | `feat: held-out 判据，不渲染进执行方提示词（P1-1）` |
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
 | P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：比 **机检失败集合**（P0-1 已算、确定性、不含模型措辞），第 N(≥2) 轮与第 N-1 轮完全相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，模型调用 0 次。第一版比过 `subject.diff_sha256`，因不可达已删除 | `fix: P1-3 判据改为机检失败集合（原字节哈希判据不可达）` |
-| P1-4 | `resume --force` 先删旧档再验证新 run，失败不可恢复 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 只做原子替换（临时文件 + `os.replace`）与"先验证后删除"，不引入 SQLite | |
+| P1-4 | `resume --force` 先删旧档再验证新 run；`state.json` 多写入者各做读改写，新字段被旧快照吃掉，且写入非原子 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 先验后删前批已落地；本批把写入收成 `write_state`（同目录临时文件 + `os.replace`）/ `update_state`（唯一修改入口）/ `create_state`（首写拒绝覆盖）/ `load_state`（缺键报路径不重建）四个入口，`ag run` 的保存退化为按 `round` 号定位、按键合并的 delta。不加锁、不引入 SQLite | `refactor: state.json 原子写入与单一写入者（P1-4）` |
 | P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes/` 脚本化后端 + adapter 注入，**不加 CLI 开关**，只作测试夹具，不是产品降级链 | |
 
 ## 逐条说明
@@ -110,12 +110,18 @@
   的分支，配上"夹具能过"的用例，比没有更误导。
 - commit：本批唯一提交（标题见上表）。
 
-### P1-4 状态原子写
+### P1-4 状态原子写与单一写入者
 
-- 问题：README「常见坑」自认 `resume --force` 先删后验。
+- 问题：README「常见坑」自认 `resume --force` 先删后验（前批已修）；`state.json` 另有
+  verifier 6 处 / orchestrator 2 处 / report 1 处各自"读-改-写"，全量覆盖导致新字段被旧快照吃掉
+  （批次 G 的 `R?` 是一例），且写入非原子、中途被杀留截断 JSON。
 - 来源：zeroshot 的 crash-safe 状态。
-- 独立设计：临时文件 + `os.replace`，删除推迟到新 run 启动成功之后。
-- commit：（待填）
+- 独立设计：临时文件（同目录，跨卷 `os.replace` 不原子）+ `os.replace`；
+  修改一律走 `update_state`，首写走 `create_state`（已存在即拒绝）；`ag run` 的保存改为
+  按 `round` 号定位、按键合并的 delta；读侧 `load_state` 缺键/坏 JSON 报路径、不重建。
+  不加文件锁、不引入 SQLite。
+- 已知边界：按键合并 + 内存值胜，不覆盖"同键双双写入"的竞争；那需要版本号或锁，本批不做。
+- commit：`refactor: state.json 原子写入与单一写入者（P1-4）`
 
 ### P1-5 测试用假后端
 

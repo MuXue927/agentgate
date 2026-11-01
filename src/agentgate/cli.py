@@ -19,7 +19,7 @@ from agentgate.orchestrator import (
 from agentgate.protected import ProtectedResult
 from agentgate.report import write_report
 from agentgate.spec import PROJECT_ROOT, SpecError, load_task
-from agentgate.status import read_state
+from agentgate.status import StateError, read_state
 from agentgate.validation import ModelPairError
 from agentgate.verifier import VerificationError, verify_run
 from agentgate.workspace import WorkspaceError, clean_agent_worktrees
@@ -118,6 +118,7 @@ def run(
         WorkspaceError,
         CollectorError,
         OrchestratorError,
+        StateError,
         ValueError,
     ) as exc:
         typer.echo(str(exc), err=True)
@@ -195,7 +196,7 @@ def verify(
 
     try:
         outcome = verify_run(task_id, force=force)
-    except (VerificationError, SpecError, ModelPairError, OSError) as exc:
+    except (VerificationError, SpecError, ModelPairError, StateError, OSError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from None
     if outcome.verdict is None:
@@ -310,6 +311,7 @@ def resume(
         ModelPairError,
         WorkspaceError,
         CollectorError,
+        StateError,
         ValueError,
     ) as exc:
         typer.echo(str(exc), err=True)
@@ -336,7 +338,11 @@ def report(
     if not task_path.is_file():
         typer.echo(f"Task snapshot not found: {task_path}", err=True)
         raise typer.Exit(code=1)
-    state = read_state(run_dir)
+    try:
+        state = read_state(run_dir)
+    except StateError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
     if state is None:
         typer.echo(f"Run state not found: {run_dir / 'state.json'}", err=True)
         raise typer.Exit(code=1)

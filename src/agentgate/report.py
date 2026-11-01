@@ -9,7 +9,7 @@ from typing import Any
 
 from agentgate.protected import ProtectedResult
 from agentgate.spec import TaskSpec
-from agentgate.status import write_state
+from agentgate.status import update_state
 
 
 @dataclass(frozen=True)
@@ -546,7 +546,11 @@ def write_report(
 ) -> Path:
     summary = collect_change_summary(state, repo=repo, run_dir=run_dir)
     persist_change_summary(state, summary)
-    write_state(run_dir, state)
+    # Through the shared single-writer path: the summary is a delta on the
+    # newest document, not this caller's snapshot of it. `ag report` passes a
+    # state it just read, but `_finish` passes the loop's, and replacing the
+    # file with that one is how round detail went missing before.
+    update_state(run_dir, lambda current: persist_change_summary(current, summary))
     path = run_dir / "report.md"
     path.write_text(
         render_report(task, state, repo=repo, run_dir=run_dir),
