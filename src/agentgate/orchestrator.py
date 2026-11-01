@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from agentgate.blocked import BlockedCode, blocked_line, parse_code
 from agentgate.execution import ExecutionOutcome, execute_round
 from agentgate.report import write_report
 from agentgate.spec import PROJECT_ROOT, TaskSpec, load_task, require_allowed_repo
@@ -46,6 +47,9 @@ class RunOutcome:
     run_dir: Path
     state: dict[str, Any]
     events: tuple[str, ...]
+    # Machine-readable reason for a BLOCKED ending, mirroring
+    # `state["terminal_code"]`. None for done/failed.
+    blocked_code: BlockedCode | None = None
 
 
 ExecutorCallable = Callable[..., ExecutionOutcome]
@@ -313,9 +317,19 @@ def _finish(
     *,
     reason: str,
     usage_provider: UsageProvider,
+    code: BlockedCode | None = None,
 ) -> dict[str, Any]:
     state["status"] = status
     state["terminal_reason"] = reason
+    if status == "blocked":
+        # Not a default: a blocked run that cannot name its cause is a bug at
+        # the call site, and quietly writing "blocked" without one is how the
+        # six different endings became indistinguishable in the first place.
+        if code is None:
+            raise OrchestratorError(f"blocked run without a BlockedCode: {reason}")
+        state["terminal_code"] = code.value
+    else:
+        state.pop("terminal_code", None)
     usage_before = state.get("usage_before")
     usage_after = _usage_after_run(usage_provider, usage_before)
     state["usage_after"] = usage_after
@@ -377,8 +391,9 @@ def _drive(
                 "blocked",
                 reason=reason,
                 usage_provider=usage_provider,
+                code=BlockedCode.BUDGET_EXCEEDED,
             )
-            push(f"BLOCKED: {reason}")
+            push(blocked_line(BlockedCode.BUDGET_EXCEEDED, reason))
             break
 
         rounds: list[dict[str, Any]] = state["rounds"]
@@ -421,8 +436,9 @@ def _drive(
                         "blocked",
                         reason=reason,
                         usage_provider=usage_provider,
+                        code=BlockedCode.INVALID_OUTPUT,
                     )
-                    push(f"BLOCKED: {reason}")
+                    push(blocked_line(BlockedCode.INVALID_OUTPUT, reason))
                     break
                 base_ref = previous["branch"]
                 previous_round_dir = run_dir / f"round-{previous['round']}"
@@ -448,8 +464,9 @@ def _drive(
                     "blocked",
                     reason=reason,
                     usage_provider=usage_provider,
+                    code=BlockedCode.BACKEND_ERROR,
                 )
-                push(f"BLOCKED: {reason}")
+                push(blocked_line(BlockedCode.BACKEND_ERROR, reason))
                 break
 
             state["elapsed_seconds"] += _stage_elapsed(clock, stage_started)
@@ -465,8 +482,9 @@ def _drive(
                     "blocked",
                     reason=reason,
                     usage_provider=usage_provider,
+                    code=BlockedCode.BUDGET_EXCEEDED,
                 )
-                push(f"BLOCKED: {reason}")
+                push(blocked_line(BlockedCode.BUDGET_EXCEEDED, reason))
                 break
             round_dir = execution.collection.round_dir
             (round_dir / "executor_prompt.txt").write_text(
@@ -479,6 +497,11 @@ def _drive(
                     if (run_dir / "BLOCKED").is_file()
                     else "executor returned BLOCKED"
                 )
+                code = execution.blocked_code
+                if code is None:
+                    raise OrchestratorError(
+                        "executor reported blocked without a BlockedCode"
+                    )
                 state = _finish(
                     task,
                     run_dir,
@@ -486,8 +509,9 @@ def _drive(
                     "blocked",
                     reason=reason,
                     usage_provider=usage_provider,
+                    code=code,
                 )
-                push(f"BLOCKED: {reason}")
+                push(blocked_line(code, reason))
                 break
 
             try:
@@ -503,8 +527,9 @@ def _drive(
                     "blocked",
                     reason=str(exc),
                     usage_provider=usage_provider,
+                    code=BlockedCode.CHECKPOINT_FAILED,
                 )
-                push(f"BLOCKED: {exc}")
+                push(blocked_line(BlockedCode.CHECKPOINT_FAILED, str(exc)))
                 break
 
             rounds.append(
@@ -566,8 +591,9 @@ def _drive(
                 "blocked",
                 reason=reason,
                 usage_provider=usage_provider,
+                code=BlockedCode.BUDGET_EXCEEDED,
             )
-            push(f"BLOCKED: {reason}")
+            push(blocked_line(BlockedCode.BUDGET_EXCEEDED, reason))
             break
 
         if verification.verdict is None:
@@ -600,8 +626,14 @@ def _drive(
                 break
             # The round did not end in "executed, waiting for verification" --
             # it ended blocked, and the report should say so.
+            code = verification.blocked_code
+            if code is None:
+                raise OrchestratorError(
+                    f"verification ended without a verdict or a BlockedCode: {reason}"
+                )
             current_round["status"] = "blocked"
             current_round["blocked_reason"] = reason
+            current_round["blocked_code"] = code.value
             state = _finish(
                 task,
                 run_dir,
@@ -609,12 +641,33 @@ def _drive(
                 "blocked",
                 reason=reason,
                 usage_provider=usage_provider,
+                code=code,
             )
-            push(f"BLOCKED: {reason}")
+            push(blocked_line(code, reason))
             break
 
         verdict = verification.verdict
         current_round["verdict"] = verdict
+        if verdict["verdict"] == "BLOCKED":
+            # The verifier declined to judge. This used to fall through to the
+            # FAIL path, where an empty defect list turned the next round into
+            # "invalid-output" -- blaming the parser for what the model said
+            # plainly. It is a terminal ending, and it has its own code.
+            reason = str(verdict.get("summary") or "verifier returned BLOCKED")
+            current_round["status"] = "blocked"
+            current_round["blocked_reason"] = reason
+            current_round["blocked_code"] = BlockedCode.VERIFIER_BLOCKED.value
+            state = _finish(
+                task,
+                run_dir,
+                state,
+                "blocked",
+                reason=reason,
+                usage_provider=usage_provider,
+                code=BlockedCode.VERIFIER_BLOCKED,
+            )
+            push(blocked_line(BlockedCode.VERIFIER_BLOCKED, reason))
+            break
         current_round["defect_fingerprints"] = sorted(_defect_map(verdict))
         if verdict["verdict"] == "PASS":
             current_round["status"] = "verified_pass"
@@ -687,6 +740,7 @@ def _drive(
         run_dir=run_dir,
         state=state,
         events=tuple(events),
+        blocked_code=parse_code(state.get("terminal_code")),
     )
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from agentgate.adapters.codex import CodexAdapter, resolve_executable
+from agentgate.blocked import BlockedCode
 from agentgate.collector import (
     CheckOutput,
     CollectorError,
@@ -32,6 +33,7 @@ from agentgate.spec import (
     validate_verdict_document,
 )
 from agentgate.status import (
+    StateError,
     clear_markers,
     load_state,
     read_state,
@@ -73,6 +75,10 @@ class VerificationOutcome:
     # environmental reason), "no-progress" or "holdout-failed" mean FAILED (a
     # real outcome).
     blocked_reason: str = ""
+    # Why it stopped, machine-readable. Required on every BLOCKED ending --
+    # `_blocked_outcome` demands one, so a new ending cannot be added without
+    # deciding which cause it is. None only for a round that got a verdict.
+    blocked_code: BlockedCode | None = None
     failure_reason: str = ""
     before_status: str = ""
     after_status: str = ""
@@ -550,10 +556,76 @@ def _text(value: str | bytes | None) -> str:
     return value
 
 
-def _mark_blocked(round_dir: Path, reason: str) -> None:
+def _mark_blocked(
+    round_dir: Path,
+    round_no: int,
+    reason: str,
+    code: BlockedCode,
+) -> None:
+    """Write the run-level BLOCKED marker and record why, in machine terms.
+
+    The marker content stays the human sentence: `runs/<id>/BLOCKED` is read by
+    people (and by the orchestrator, which relays it), and its first line has
+    never been anything but prose. The code goes into the run state and, when
+    the round is already recorded, into that round's entry as well.
+    """
+
     run_dir = round_dir.parent
     write_marker(run_dir, "BLOCKED", reason)
-    set_status(run_dir, "blocked")
+
+    def mutate(state: dict[str, Any]) -> None:
+        state["status"] = "blocked"
+        # Without this the report falls back to "需要人工处理" for every
+        # blocking site that is not also a recorded round -- which was most of
+        # them: only `_record_blocked_round` used to write the reason.
+        state["terminal_reason"] = reason
+        state["terminal_code"] = code.value
+        entry = _round_entry(state, round_no)
+        if entry is not None:
+            entry["status"] = "blocked"
+            entry["blocked_reason"] = reason
+            entry["blocked_code"] = code.value
+
+    try:
+        _update_run_state(run_dir, mutate)
+    except StateError:
+        # The state is unreadable -- which is one of the reasons a round ends
+        # up here. Writing the code into it would mean repairing the document
+        # nobody can parse, so the code lives on the outcome and the CLI line
+        # instead; the marker above is what an operator sees either way.
+        pass
+
+
+def _blocked_outcome(
+    task_id: str,
+    round_dir: Path,
+    round_no: int,
+    reason: str,
+    code: BlockedCode,
+    *,
+    attempts: tuple[AttemptResult, ...] = (),
+    before_status: str = "",
+    after_status: str = "",
+    protected: ProtectedResult | None = None,
+) -> VerificationOutcome:
+    """The only way to end a round without a verdict.
+
+    `code` is a plain required parameter -- there is no default to forget and
+    no `str` to typo, so every BLOCKED carries a cause by construction.
+    """
+
+    _mark_blocked(round_dir, round_no, reason, code)
+    return VerificationOutcome(
+        task_id=task_id,
+        round_dir=round_dir,
+        verdict=None,
+        attempts=attempts,
+        blocked_reason=reason,
+        blocked_code=code,
+        before_status=before_status,
+        after_status=after_status,
+        protected=protected,
+    )
 
 
 def _clear_previous_outcome(run_dir: Path, round_dir: Path) -> None:
@@ -604,6 +676,7 @@ def _record_blocked_round(
     round_no: int,
     reason: str,
     *,
+    code: BlockedCode,
     protected: ProtectedResult | None = None,
 ) -> None:
     """Mark the round BLOCKED in state.json without inventing a verdict."""
@@ -614,6 +687,7 @@ def _record_blocked_round(
             return
         entry["status"] = "blocked"
         entry["blocked_reason"] = reason
+        entry["blocked_code"] = code.value
         if protected is not None:
             entry["protected"] = protected.as_document()
         # A blocked round has no verdict and no mechanical result. Leaving
@@ -622,6 +696,7 @@ def _record_blocked_round(
         for stale_key in ("verdict", "mechanical", "defect_fingerprints"):
             entry.pop(stale_key, None)
         state["terminal_reason"] = reason
+        state["terminal_code"] = code.value
 
     _update_run_state(run_dir, mutate)
 
@@ -632,7 +707,13 @@ def _record_protected_block(
     protected: ProtectedResult,
     reason: str,
 ) -> None:
-    _record_blocked_round(run_dir, round_no, reason, protected=protected)
+    _record_blocked_round(
+        run_dir,
+        round_no,
+        reason,
+        code=BlockedCode.PROTECTED_PATH,
+        protected=protected,
+    )
 
 
 def _previous_mechanical_failures(
@@ -787,6 +868,10 @@ def _record_round_in_state(
             return
         entry["status"] = status
         entry["verdict"] = verdict
+        if status == "blocked":
+            # The only way a verdict maps to "blocked" is the verifier saying
+            # so itself: the evidence is there, the model will not judge it.
+            entry["blocked_code"] = BlockedCode.VERIFIER_BLOCKED.value
         if mechanical is not None:
             entry["mechanical"] = mechanical.as_document()
         if protected is not None:
@@ -832,7 +917,26 @@ def verify_round(
         )
 
     task = load_task(task_path)
-    state = _read_round_state(state_path)
+    try:
+        state = _read_round_state(state_path)
+        # The run state is optional for a round, but when it is there it has to
+        # be readable: both the round's head commit and the no-progress
+        # baseline are read from it below, and a document nobody can parse
+        # would silently turn that gate off instead of failing.
+        # `require=("rounds",)` because a round verification reads nothing else.
+        if (run_dir / "state.json").is_file():
+            load_state(run_dir, require=("rounds",))
+    except (VerificationError, StateError) as exc:
+        # Fail closed, and say which failure it was. The file is left exactly
+        # as it is: an unreadable state is an environment problem, not
+        # something to repair by guessing what the rounds must have been.
+        return _blocked_outcome(
+            task_id,
+            round_dir,
+            round_no,
+            str(exc),
+            BlockedCode.UNREADABLE_STATE,
+        )
     if state.get("task_id") != task_id:
         raise VerificationError("state.json task_id does not match run directory")
     if state.get("status") != "executed":
@@ -858,14 +962,6 @@ def verify_round(
         verifier_scaffold=task.verifier.harness,
     )
 
-    # The run state is optional for a round, but when it is there it has to be
-    # readable: both the round's head commit and the no-progress baseline are
-    # read from it later, and a document nobody can parse would silently turn
-    # that gate off instead of failing. `require=("rounds",)` because a round
-    # verification reads nothing else from it.
-    if (run_dir / "state.json").is_file():
-        load_state(run_dir, require=("rounds",))
-
     stored_checks = _stored_checks(task, round_dir)
     before_status = _git_status(worktree)
     before_head = _git_head(worktree)
@@ -890,14 +986,18 @@ def verify_round(
             f"{recorded_head[:7]}; collect the round again instead of "
             "re-verifying frozen artifacts"
         )
-        _record_blocked_round(run_dir, round_no, reason)
-        _mark_blocked(round_dir, reason)
-        return VerificationOutcome(
-            task_id=task_id,
-            round_dir=round_dir,
-            verdict=None,
-            attempts=(),
-            blocked_reason=reason,
+        _record_blocked_round(
+            run_dir,
+            round_no,
+            reason,
+            code=BlockedCode.STALE_SUBJECT,
+        )
+        return _blocked_outcome(
+            task_id,
+            round_dir,
+            round_no,
+            reason,
+            BlockedCode.STALE_SUBJECT,
             before_status=before_status,
             after_status=before_status,
         )
@@ -908,13 +1008,12 @@ def verify_round(
     if not protected.ok:
         reason = protected.reason()
         _record_protected_block(run_dir, round_no, protected, reason)
-        _mark_blocked(round_dir, reason)
-        return VerificationOutcome(
-            task_id=task_id,
-            round_dir=round_dir,
-            verdict=None,
-            attempts=(),
-            blocked_reason=reason,
+        return _blocked_outcome(
+            task_id,
+            round_dir,
+            round_no,
+            reason,
+            BlockedCode.PROTECTED_PATH,
             before_status=before_status,
             after_status=before_status,
             protected=protected,
@@ -1045,13 +1144,13 @@ def verify_round(
         after_status = _git_status(worktree)
         if after_status != before_status:
             reason = "verifier modified the worktree"
-            _mark_blocked(round_dir, reason)
-            return VerificationOutcome(
-                task_id=task_id,
-                round_dir=round_dir,
-                verdict=None,
+            return _blocked_outcome(
+                task_id,
+                round_dir,
+                round_no,
+                reason,
+                BlockedCode.VERIFIER_MUTATED,
                 attempts=tuple(attempts),
-                blocked_reason=reason,
                 before_status=before_status,
                 after_status=after_status,
             )
@@ -1063,13 +1162,13 @@ def verify_round(
                 "stale-subject: worktree HEAD moved during verification "
                 f"({before_head[:7]} -> {after_head[:7]})"
             )
-            _mark_blocked(round_dir, reason)
-            return VerificationOutcome(
-                task_id=task_id,
-                round_dir=round_dir,
-                verdict=None,
+            return _blocked_outcome(
+                task_id,
+                round_dir,
+                round_no,
+                reason,
+                BlockedCode.STALE_SUBJECT,
                 attempts=tuple(attempts),
-                blocked_reason=reason,
                 before_status=before_status,
                 after_status=after_status,
             )
@@ -1081,25 +1180,25 @@ def verify_round(
             reason = (
                 f"stale-subject: frozen artifacts changed during verification ({drift})"
             )
-            _mark_blocked(round_dir, reason)
-            return VerificationOutcome(
-                task_id=task_id,
-                round_dir=round_dir,
-                verdict=None,
+            return _blocked_outcome(
+                task_id,
+                round_dir,
+                round_no,
+                reason,
+                BlockedCode.STALE_SUBJECT,
                 attempts=tuple(attempts),
-                blocked_reason=reason,
                 before_status=before_status,
                 after_status=after_status,
             )
         if attempt.exit_code != 0:
             reason = f"verifier exited {attempt.exit_code}: {attempt.stderr}"
-            _mark_blocked(round_dir, reason)
-            return VerificationOutcome(
-                task_id=task_id,
-                round_dir=round_dir,
-                verdict=None,
+            return _blocked_outcome(
+                task_id,
+                round_dir,
+                round_no,
+                reason,
+                BlockedCode.BACKEND_ERROR,
                 attempts=tuple(attempts),
-                blocked_reason=reason,
                 before_status=before_status,
                 after_status=after_status,
             )
@@ -1125,17 +1224,18 @@ def verify_round(
     if verdict is None:
         if parse_error.startswith("verdict.subject"):
             # Not a parse failure: the model answered, but about something
-            # other than the evidence in front of it.
+            # other than the evidence in front of it. Still the same ending:
+            # no usable verdict came back, so this round cannot be judged.
             reason = f"subject mismatch twice: {parse_error}"
         else:
             reason = f"verdict extraction failed twice: {parse_error}"
-        _mark_blocked(round_dir, reason)
-        return VerificationOutcome(
-            task_id=task_id,
-            round_dir=round_dir,
-            verdict=None,
+        return _blocked_outcome(
+            task_id,
+            round_dir,
+            round_no,
+            reason,
+            BlockedCode.INVALID_OUTPUT,
             attempts=tuple(attempts),
-            blocked_reason=reason,
             before_status=before_status,
             after_status=before_status,
         )
@@ -1149,7 +1249,12 @@ def verify_round(
         write_marker(run_dir, "DONE")
         set_status(run_dir, "done")
     elif verdict["verdict"] == "BLOCKED":
-        _mark_blocked(round_dir, verdict.get("summary", "verifier returned BLOCKED"))
+        _mark_blocked(
+            round_dir,
+            round_no,
+            verdict.get("summary", "verifier returned BLOCKED"),
+            BlockedCode.VERIFIER_BLOCKED,
+        )
     elif manage_fail_status:
         set_status(run_dir, "failed")
     return VerificationOutcome(
@@ -1161,6 +1266,9 @@ def verify_round(
         after_status=before_status,
         mechanical=mechanical,
         protected=protected,
+        blocked_code=(
+            BlockedCode.VERIFIER_BLOCKED if verdict["verdict"] == "BLOCKED" else None
+        ),
     )
 
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from agentgate import runner
 from agentgate.adapters.codex import RunResult
+from agentgate.blocked import BlockedCode
 from agentgate.collector import (
     CollectionResult,
     CollectorError,
@@ -30,6 +31,10 @@ class ExecutionOutcome:
     result: RunResult
     prompt: str
     blocked: bool
+    # Why, when `blocked` is true. The orchestrator refuses a blocked outcome
+    # without one, so the two ways a round can stop here stay distinguishable:
+    # the executor crashed (backend) or it produced no diff at all (no-changes).
+    blocked_code: BlockedCode | None = None
 
 
 def build_defect_prompt(
@@ -126,6 +131,7 @@ def execute_round(
                 result=result,
                 prompt=prompt,
                 blocked=True,
+                blocked_code=BlockedCode.BACKEND_ERROR,
             )
         try:
             collection = collect_success(
@@ -155,6 +161,7 @@ def execute_round(
                 result=result,
                 prompt=prompt,
                 blocked=True,
+                blocked_code=BlockedCode.NO_CHANGES,
             )
     except Exception:
         if not (round_dir.parent / "BLOCKED").exists():

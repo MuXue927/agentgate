@@ -7,6 +7,7 @@ from typing import Annotated
 import typer
 
 from agentgate import __version__
+from agentgate.blocked import blocked_line
 from agentgate.collector import CollectorError
 from agentgate.doctor import collect_report, render_report
 from agentgate.dryrun import prepare_dry_run
@@ -208,7 +209,15 @@ def verify(
             # A real ending, not an environment problem: exit 1, not 2.
             typer.echo(f"FAILED: {failure} — {outcome.blocked_reason}", err=True)
             raise typer.Exit(code=1)
-        typer.echo(f"BLOCKED: {outcome.blocked_reason}", err=True)
+        # `verify_round` cannot return a blocked outcome without a code; a
+        # hand-built one (tests, a plugin) can, and keeps the old wording.
+        code = getattr(outcome, "blocked_code", None)
+        typer.echo(
+            blocked_line(code, outcome.blocked_reason)
+            if code is not None
+            else f"BLOCKED: {outcome.blocked_reason}",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     verdict = outcome.verdict

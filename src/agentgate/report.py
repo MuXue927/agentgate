@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentgate.blocked import blocked_line
 from agentgate.protected import ProtectedResult
 from agentgate.spec import TaskSpec
 from agentgate.status import update_state
@@ -54,6 +55,9 @@ def _round_line(round_state: dict[str, Any]) -> str:
         return f"- R{number}: {failure}"
     verdict = round_state.get("verdict")
     if not isinstance(verdict, dict):
+        code = round_state.get("blocked_code")
+        if isinstance(code, str) and code:
+            return f"- R{number}: BLOCKED [{code}]"
         return f"- R{number}: {round_state.get('status', 'unknown')}"
     defects = verdict.get("defects", [])
     if verdict.get("verdict") == "PASS":
@@ -129,6 +133,9 @@ def _decision_fact(state: dict[str, Any]) -> str:
         return "建议合并。"
     if status == "failed":
         return f"不建议合并；需先处理：{reason or '轮次预算耗尽'}。"
+    if state.get("terminal_code"):
+        # The headline above already carries BLOCKED [code]: reason.
+        return "暂不合并；见上方阻塞原因。"
     return f"暂不合并；阻塞原因：{reason or '需要人工处理'}。"
 
 
@@ -225,6 +232,28 @@ def _evidence_lines(
     return ["## 验收证据", *facts, ""]
 
 
+def _blocked_lines(state: dict[str, Any]) -> list[str]:
+    """The run's BLOCKED headline, with the machine-readable cause.
+
+    `BLOCKED` covers a dead backend, a model that answered with prose, and a
+    verifier that judged the evidence insufficient. The code is what tells them
+    apart; the reason stays as it was, in the same line.
+
+    A run recorded before the field existed has no code, and gets the old
+    wording rather than an invented cause.
+    """
+
+    if str(state.get("status", "")).lower() != "blocked":
+        return []
+    code = state.get("terminal_code")
+    if not isinstance(code, str) or not code:
+        # Recorded before the field existed. Its conclusion already says
+        # "暂不合并；阻塞原因：…", and a second copy of the same sentence would
+        # only make the report noisier -- so old runs keep their old wording.
+        return []
+    return [blocked_line(code, str(state.get("terminal_reason") or "需要人工处理"))]
+
+
 def _no_progress_lines(round_list: list[dict[str, Any]]) -> list[str]:
     """Why the run stopped, when it stopped for producing nothing new.
 
@@ -311,7 +340,12 @@ def _conclusion(
     subject = _subject_fact(round_list)
     if subject is not None:
         facts.insert(0, subject)
-    return [*_no_progress_lines(round_list), *_holdout_lines(round_list), *facts]
+    return [
+        *_blocked_lines(state),
+        *_no_progress_lines(round_list),
+        *_holdout_lines(round_list),
+        *facts,
+    ]
 
 
 def _parse_numstat(output: str, statuses: dict[str, str]) -> ChangeSummary:
