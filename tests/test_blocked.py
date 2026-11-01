@@ -220,29 +220,3 @@ def test_unreadable_state_carries_code_without_repairing(tmp_path: Path) -> None
         assert (run_dir / "BLOCKED").is_file()
     finally:
         cleanup_worktree(tmp_path / "target", worktree, BRANCH)
-
-
-def test_unreadable_state_carries_code_without_repairing(tmp_path: Path) -> None:
-    """The one ending that cannot record its code in the state it cannot read.
-
-    The document stays exactly as it was found -- repairing it here would mean
-    guessing which rounds happened, which is what batch I's `StateError` exists
-    to prevent. The code reaches the caller and the marker instead.
-    """
-
-    runs_root, worktree = prepare_run(tmp_path)
-    write_run_state(runs_root, worktree, rounds=1)
-    run_dir = runs_root / RUN
-    broken = run_dir / "state.json"
-    broken.write_text('{"rounds": [', encoding="utf-8")
-
-    try:
-        outcome = verify_run(RUN, runs_root=runs_root, command_runner=_never_called)
-
-        assert outcome.verdict is None
-        assert outcome.blocked_code == BlockedCode.UNREADABLE_STATE
-        assert str(broken) in outcome.blocked_reason
-        assert broken.read_text(encoding="utf-8") == '{"rounds": ['
-        assert (run_dir / "BLOCKED").is_file()
-    finally:
-        cleanup_worktree(tmp_path / "target", worktree, BRANCH)
