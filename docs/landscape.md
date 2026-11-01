@@ -309,17 +309,27 @@ FAIL → 最终 FAIL（两侧都 PASS 才算 PASS）。这条防的是"机检通
 ### P1-5 假后端只存在于测试里
 
 - 问题：每次改循环逻辑都要真跑 Codex，慢且不稳。
-- 做法：`tests/fakes/` 提供脚本化 executor/verifier，用 `adapter` 注入参数
-  驱动整条环（执行→机检→验收→回灌→终态），**不加 CLI 开关**。
+- 做法：`tests/fakes.py` 提供 `scripted_executor` / `scripted_verifier`，
+  **只替换两个进程边界**（执行方的 `runner.run`、验收方的 `command_runner`），
+  采集、机检、四道门、状态写入、marker、报告全部走真代码；通过
+  `start_task(executor=..., verifier=...)` 的既有注入点驱动，**不加 CLI 开关**。
+- 判据：`tests/test_fake_loop.py` 三条（FAIL→回灌→PASS、保护路径、无净进展），
+  单条 1.6–2.7s，不触网、不调模型。
 - 借鉴自：loope 的 `--dry-run` stub agents。我们是测试夹具，不是产品降级链，
   与铁律 1 不冲突。
 
 ### P2（先记账，不动手）
 
-- 报告加"证据索引"：每条结论对应哪个工件、哪条命令。
-- `BLOCKED` 增加机器可读 `reason_code`，把"后端故障"与"证据不足"分开。
-- README 增一节"外部佐证"：agent-loops ADR 0038 独立得出"Codex reviewer
-  默认只能无沙箱跑"的结论，与我们 README 的 Windows 沙箱坑互证。
+- ~~P2-1 报告加"证据索引"~~：每条结论对应哪个工件、哪条命令。**本批跳过**，
+  理由写在 `docs/acceptance.md`「本批跳过的一条」：要改结论段结构，而没有
+  真实任务证明它更好读之前，改格式的风险大于收益。
+- ~~P2-2 `BLOCKED` 增加机器可读 `reason_code`~~：已落地，
+  `blocked.BlockedCode` 十种（`backend-error` / `invalid-output` /
+  `verifier-blocked` / `no-changes` / `protected-path` / `stale-subject` /
+  `unreadable-state` / `verifier-mutated` / `budget-exceeded` /
+  `checkpoint-failed`），outcome、`state.json`、报告三处一致；
+  每个产生点强制传 code，没有默认值。详见 `steps/step-14-blocked-code.md`。
+- ~~P2-3 README 增一节"外部佐证"~~：已落地，见 README「外部佐证」。
 
 ## 5. 明确不借
 

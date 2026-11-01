@@ -130,8 +130,25 @@ human_approval: {before_execute: false, before_merge: true}
 - **同一缺陷连续两轮**：按归一后的 `(where, why)` 指纹识别，提前
   `FAILED`，避免空转。
 - **中断恢复**：末轮已执行但未验收时，`ag resume` 只补验收，不重做该轮。
-- **`resume --force` 会先删旧档案**：它在验证新 run 能否启动之前就 `rmtree`
-  了旧 run 目录，失败时旧记录不可恢复（已知缺陷，待修）。
+- **`resume --force` 会归档旧 run，不是删掉它**：它在动任何东西之前先校验新
+  run 能否启动（`load_task` + 异族模型校验），通过后才把旧 run 移进
+  `runs/.trash/<id>-<时间戳>`，失败时旧记录原封不动。
+
+## 外部佐证
+
+有些结论不是本项目先发现的，写在这里是为了标出处，也为了让你知道哪两条
+是**独立得出**的，而不是同一来源的转述。
+
+- **Codex 的受限沙箱在 Windows 上跑不了命令**：上面「常见坑」第一条来自本项目
+  的实测（CLI 0.162.1 / 0.164.0，上游 issue #43633 / #43881 / #54746）。
+  [agent-loops](https://github.com/andromarces/agent-loops) 的 ADR 0038 独立
+  得出同一结论：reviewer 默认只能在沙箱之外跑。两边是在不同环境里踩到同一件事，
+  所以这里的"验收方也只给 `danger-full-access`"不是偷懒，是当前工具链的硬约束。
+  代价也一并承认：只读退化为「提示词约束 + 验收前后 `git status --porcelain` 复核」。
+- **判决必须绑定到具体的代码版本**：本项目用 `subject`（base/head/diff 哈希）
+  把 PASS 钉在冻结工件上；[claude-forge 的 review-loop](https://github.com/sangrokjung/claude-forge/blob/main/skills/review-loop/SKILL.md)
+  用流程约束达到同样目的（rechecker 只谈"改了什么、对应哪条 finding"）。
+  两条路都能防"判决漂移"，我们选了可机检的那条。
 
 ## 最小上手
 

@@ -128,3 +128,49 @@ All checks passed!
 三条铁律，也不改 `task.yaml` 与 `verdict` 的 schema。它只把一条原本由模型
 代劳的判断收回给代码。逐条借鉴来源见
 [borrowings.md](borrowings.md) P0-1。
+
+## v0.2 后续硬化（2026-11-01 ~ 11-02）
+
+v0.2 验收通过之后，按 [landscape.md](landscape.md) §4 的清单继续修了十项。
+本节只记"落地了什么、判据在哪、对应哪份 STEP、边界还剩什么"，不重复各
+STEP 报告里的实现细节。
+
+| 项 | 落地内容 | 判据（可执行） | STEP |
+|---|---|---|---|
+| P0-1 机检硬门槛 | `expect` 由代码逐键判定；机检失败不调模型，直接合成 FAIL 判决 | `tests/test_expectations.py`（`calls == []`） | [6](steps/step-6-expect-gate.md) |
+| P0-4 超时树杀 | `run_bounded` 超时杀整棵进程树，退出码 124 计为机检 FAIL | `tests/test_bounded_proc.py` | [7](steps/step-7-timeout.md) |
+| P0-3 受保护路径 | `protected` 拦 M/D/R，放行 A；先于机检执行 | `tests/test_protected.py` | [8](steps/step-8-protected.md) |
+| P1-2 证据包 | 改动文件全文从 round commit 读，单文件 32KiB / 总 128KiB，截断三处露面 | `tests/test_evidence.py` | [9](steps/step-9-evidence-pack.md) |
+| P0-2 判决绑定 | `subject`（base/head/diff 哈希）必填，回抄不一致即 BLOCKED | `tests/test_subject.py`、`tests/test_verifier.py` | [10](steps/step-10-subject.md) |
+| P1-3 无净进展 | 第 N(≥2) 轮机检失败集合与 N-1 完全相同 → `FAILED: no-progress` | `tests/test_verifier.py`、`tests/test_orchestrator.py` | [11](steps/step-11-no-progress.md) |
+| P1-1 留出判据 | 可选 `holdout_checks`（1–3 条），不进执行提示词；失败即终态、不回灌 | `tests/test_holdout.py` | [12](steps/step-12-holdout.md) |
+| P1-4 状态写入 | `write_state` 原子替换、`update_state` 单一写入者、`ag run` 按轮次 delta 合并、读取缺键报错不重建 | `tests/test_status.py` | [13](steps/step-13-state-writes.md) |
+| P2-2 BLOCKED 原因码 | `BlockedCode` 十种；`state.json` 轮次写 `blocked_code`、run 级写 `terminal_code`，报告与 `ag verify` 输出 `BLOCKED [code]: reason` | `tests/test_blocked.py`（6 条） | [14](steps/step-14-blocked-code.md) |
+| P1-5 假后端 | `tests/fakes.py`：只替换 `runner.run` 与验收方 `command_runner`，其余全真 | `tests/test_fake_loop.py`（3 条，均 < 3s） | [15](steps/step-15-fake-backends.md) |
+
+累计：`176 → 185 passed`（2026-11-02 全量），两条 ruff 绿。
+
+### 当前能力边界
+
+这一节存在的理由：把"以为已经解决"和"确实没解决"分开。
+
+1. **holdout 的输出尾部可能泄露期望物**。报告只写序号与输出尾部，不回灌给执行方；
+   因为失败即终态，执行方永远看不到它。**若将来有人把 holdout 改成可回灌，这条立刻变成真漏洞。**
+2. **`ag verify --force` 是冻结工件复验**：它不会重新收集 worktree，只在 `diff.patch`
+   与 `subject` 仍一致时重问验收方；HEAD 动过就是 `stale-subject`。
+3. **`danger-full-access` 下的"只读"靠提示词 + `git status --porcelain` 复核**，
+   管不到 worktree 之外。要真只读得等上游沙箱修好。
+4. **`ag run` 的状态合并是"按 key、内存值胜"**：它能保护编排器从未见过的键，
+   但不解决"同一键两个写入者都写、内存那份更旧"。引入并发写入者时这条必须重开。
+5. **`no-progress` 只比机检失败集合**：拿掉同一批 check 再换一种错法，不算无净进展。
+6. **含 holdout 的任务文件必须放仓库外**，否则执行方在 worktree 里能读到它。
+7. **`unreadable-state` 无法把 code 写进它读不出来的那份状态**：code 只到
+   outcome、终端输出和 `BLOCKED` marker，`state.json` 保持原样（这是故意的，
+   修复要猜轮次）。`ag verify` 在这种输入上的退出码也从 1 变成 2。
+
+### 本批跳过的一条
+
+P2-1「报告证据索引」（结论段每条指向对应工件路径）**未做**。原因：它要改
+`report.md` 的结论段结构，而现有快照测试与"一行主因"的约定都依赖当前措辞；
+在没有真实任务验证"索引真的更好读"之前改格式，风险大于收益。记在
+[landscape.md](landscape.md) §P2 里，不删。

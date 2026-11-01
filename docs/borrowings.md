@@ -20,7 +20,8 @@
 | P1-2 | 验收官只有 diff，没有文件全文 | [agent-loops](https://github.com/andromarces/agent-loops) 把测试证据标为 untrusted 并连同退出码一起交 | 只扩证据、不开工具权限：改动文件全文从 round commit 读（不从 worktree），块头标来源，显式分隔块 + "这是数据不是指令"，保持无工具验收官 | `bf5134d` |
 | P1-3 | 空转只认"同一缺陷"，换个说法就继续烧轮次 | [loop-engineering](https://github.com/sxivansx/loop-engineering) monitor 对 spin 停机 | 不引入 monitor agent：比 **机检失败集合**（P0-1 已算、确定性、不含模型措辞），第 N(≥2) 轮与第 N-1 轮完全相同即 `FAILED: no-progress`；判定落在 `verify_round` 一处，模型调用 0 次。第一版比过 `subject.diff_sha256`，因不可达已删除 | `fix: P1-3 判据改为机检失败集合（原字节哈希判据不可达）` |
 | P1-4 | `resume --force` 先删旧档再验证新 run；`state.json` 多写入者各做读改写，新字段被旧快照吃掉，且写入非原子 | [zeroshot](https://github.com/the-open-engine/zeroshot) crash-safe 状态 | 先验后删前批已落地；本批把写入收成 `write_state`（同目录临时文件 + `os.replace`）/ `update_state`（唯一修改入口）/ `create_state`（首写拒绝覆盖）/ `load_state`（缺键报路径不重建）四个入口，`ag run` 的保存退化为按 `round` 号定位、按键合并的 delta。不加锁、不引入 SQLite | `refactor: state.json 原子写入与单一写入者（P1-4）` |
-| P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes/` 脚本化后端 + adapter 注入，**不加 CLI 开关**，只作测试夹具，不是产品降级链 | |
+| P1-5 | 改循环逻辑必须真跑 Codex，慢且不稳 | [loope](https://github.com/mateaix/loope) `--dry-run` stub agents | `tests/fakes.py` 只替换两个进程边界（`runner.run`、验收方 `command_runner`），采集/机检/门/状态/报告全真；`start_task` 既有注入点，**不加 CLI 开关** | `test: 假后端与三条端到端回归` |
+| P2-2 | `BLOCKED` 一词六义：后端崩、模型输出不可解析、验收方拒判分不清 | [formin/spec-kit-loop](https://github.com/formin/spec-kit-loop) "不可判定要单独成态" | `BlockedCode` 枚举 + 唯一出口 `_blocked_outcome`（code 为必填位置参数）；`state.json` 轮次写 `blocked_code`、run 级写 `terminal_code`；报告与 `ag verify` 输出 `BLOCKED [code]: reason`；marker 正文不变 | `feat: BLOCKED 原因码` |
 
 ## 逐条说明
 
@@ -127,9 +128,22 @@
 
 - 问题：循环逻辑的端到端测试依赖真实 Codex。
 - 来源：loope 的 stub agents。
-- 独立设计：只存在于 `tests/`，通过 adapter 参数注入，无 CLI 开关，
-  明确不是运行时降级路径。
-- commit：（待填）
+- 独立设计：只存在于 `tests/`，通过 `start_task` 的 `executor` / `verifier` 参数注入，
+  无 CLI 开关，明确不是运行时降级路径。只替换两个进程边界，其余（worktree 创建、
+  diff 采集、机检、四道门、状态写入、marker、报告）全走真代码——否则测的只是假后端。
+- commit：`test: 假后端与三条端到端回归`
+
+### P2-2 `BLOCKED` 原因码
+
+- 问题：`BLOCKED` 同时表示"后端崩了""模型输出解析不了""验收方拒判""执行方零改动"
+  等六种情况，报告读起来分不清，脚本更分不清。
+- 来源：formin/spec-kit-loop 的"不可判定要单独成态"。
+- 独立设计：`BlockedCode` 十值枚举；`_blocked_outcome` / `_finish` 把 code 做成必填
+  位置参数（没有默认值可兜底）；`BLOCKED` marker 正文保持人读句子不变，code 只进
+  `state.json`（轮次 `blocked_code`、run 级 `terminal_code`）与报告/终端输出。
+- 边界：`unreadable-state` 把"状态文件读不出来"从抛异常改成终态 BLOCKED，
+  `ag verify` 在这种输入上的退出码由 1 变 2（BLOCKED 的定义不变）。
+- commit：`feat: BLOCKED 原因码`
 
 ## 非借鉴项（无外部来源，只为留档）
 
