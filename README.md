@@ -1,6 +1,7 @@
 # AgentGate
 
 [![ci](https://github.com/MuXue927/agentgate/actions/workflows/ci.yml/badge.svg)](https://github.com/MuXue927/agentgate/actions/workflows/ci.yml)
+[![version](https://img.shields.io/badge/version-v0.2.0-blue.svg)](https://github.com/MuXue927/agentgate/releases/tag/v0.2.0)
 
 `ag` 是一个单一用途的无人值守执行/验收 CLI：Codex 执行、另一个模型在
 `-s read-only` 沙箱里只读验收；不过就把 defect 回灌给 Codex，最多跑到
@@ -14,9 +15,10 @@
 | 命令 | 用途 |
 |---|---|
 | `ag doctor` | 探测后端，打印当前双盲档位 |
+| `ag version` | 打印版本号 |
 | `ag run <task.yaml> [--dry-run] [--rounds N] [--allow-self]` | 跑完整轮次循环 |
 | `ag verify <task-id> [--force]` | 只验收当前未验收轮次，不回灌 |
-| `ag resume <task-id> [--force]` | 从下一个未完成轮次续跑 |
+| `ag resume <task-id> [--force] [--allow-self]` | 从下一个未完成轮次续跑 |
 | `ag clean [<task-id>\|--all] [--force]` | 清 AgentGate worktree 与 `ag/*` 分支 |
 | `ag report <task-id>` | 从已有 `state.json` 和工件重生成 `report.md`，不调模型 |
 
@@ -94,7 +96,11 @@ human_approval: {before_execute: false, before_merge: true}
 
 1. 执行与验收必须使用不同模型族；同族模型会被拒绝。默认执行模型是
    `deepseek-v4-flash`，默认验收模型是
-   `nvidia/nemotron-3.5-lightning:free`，当前档位为 ★★。
+   `nvidia/nemotron-3.5-lightning:free`，这一对给的是 **★★**。档位不是常量：
+   可选验收后端 Pi（+ `bigmodel/glm-4.7-flash`）有可用凭证并探测通过时凑齐
+   "不同脚手架 + 不同模型"，升到 **★★★**（v0.2.0 定稿两次实测即 ★★★）。
+   **任何写死的档位都只是快照，以当场 `ag doctor` 为准**；两段带时间戳的记录见
+   [docs/acceptance.md](docs/acceptance.md)。档位只换"谁来验收"，不换任何判据。
 2. 验收方必须在 `-s read-only` 沙箱中运行。验收前后会比较
    `git status --porcelain`；worktree 发生变化时本次验收直接 `BLOCKED`。
 3. `ag` 永不自动合并。PASS 只留下 `DONE`、`report.md` 和待合并分支，
@@ -193,6 +199,11 @@ git merge --no-ff ag/<task-id>-r<N>
 [docs/design.md](docs/design.md) 和
 [AgentGate v0.2 实现报告](docs/AgentGate-v0.2-实现报告.md)。逐步实现和
 验证据见 [STEP 5 报告](docs/steps/step-5-loop.md)。
+
+判断某条机制为什么是这样之前，可以先看这两份：
+[docs/landscape.md](docs/landscape.md) 是同类项目调研（含 10 项硬化的来源清单与
+未采用项的理由），[docs/borrowings.md](docs/borrowings.md) 是逐条借鉴留痕
+（借鉴了什么、没借鉴什么、以及和原作的差异）。
 
 ## 受以下项目启发
 
